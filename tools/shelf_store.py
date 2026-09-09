@@ -150,10 +150,24 @@ class ShelfStore:
         check,
         principal: str,
         idempotency_key: str,
+        expires_at_epoch: float | None = None,
+        ttl_seconds: int | None = None,
+        key_namespace: str | None = None,
+        hold_lock: bool = False,
     ) -> dict[str, Any]:
-        """Stage blob then commit manifest. ACCEPTED here; REPLICATED is outbox."""
-        with LOCK:
-            existing = self.lookup_key(principal, idempotency_key)
+        """Stage blob then commit manifest. ACCEPTED here; REPLICATED is outbox.
+
+        key_namespace: when set (e.g. "upload-commit"), key file is
+        ``{namespace}__{principal}__{key}.json`` so large-lane commits do not
+        collide with small-lane or upload-init key maps.
+        hold_lock: caller already holds LOCK (upload commit path).
+        """
+
+        def _run() -> dict[str, Any]:
+            key_path = self.keys / _namespaced_key_name(
+                principal, idempotency_key, key_namespace
+            )
+            existing = _read_json(key_path) if key_path.is_file() else None
             if existing:
                 if existing.get("fingerprint") != check.fingerprint:
                     return {
@@ -182,6 +196,15 @@ class ShelfStore:
 
             op_id = str(uuid.uuid4())
             now = _now()
+            expires_at = None
+            if expires_at_epoch is not None:
+                expires_at = time.strftime(
+                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime(expires_at_epoch)
+                )
+            elif ttl_seconds:
+                expires_at = time.strftime(
+                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + int(ttl_seconds))
+                )
             receipt = {
                 "operation_id": op_id,
                 "state": "ACCEPTED",
@@ -202,12 +225,16 @@ class ShelfStore:
                     "oracle": f"https://158.178.144.114/board-showcase/{check.filename}",
                     "pages": f"https://daedalus-agent-lab.github.io/board-showcase/{check.filename}",
                     "by_sha256": f"https://158.178.144.114/v1/by-sha256/{check.sha256}",
+                    "blobs": f"https://158.178.144.114/v1/blobs/{check.sha256}",
                     "operation": f"https://158.178.144.114/v1/operations/{op_id}",
                 },
             }
+            if expires_at:
+                receipt["expires_at"] = expires_at
+                receipt["ttl_seconds"] = int(ttl_seconds) if ttl_seconds else None
             _write_json(self.ops / f"{op_id}.json", receipt)
             _write_json(
-                self.keys / _key_name(principal, idempotency_key),
+                key_path,
                 {
                     "operation_id": op_id,
                     "fingerprint": check.fingerprint,
@@ -217,14 +244,15 @@ class ShelfStore:
 
             man = self.load_manifest()
             arts = list(man.get("artifacts") or [])
+            row = _artifact_row(check, now, expires_at=expires_at)
             replaced = False
             for i, a in enumerate(arts):
                 if a.get("sha256") == check.sha256 or a.get("filename") == check.filename:
-                    arts[i] = _artifact_row(check, now)
+                    arts[i] = row
                     replaced = True
                     break
             if not replaced:
-                arts.append(_artifact_row(check, now))
+                arts.append(row)
             # previous_sha256 = sha256 of the last *published* manifest bytes.
             # Must be captured before this write (axio MISMATCH aaff4296 ≠ 84d42a93:
             # hashing a body that already carried previous_sha256 made a self-hash).
@@ -236,13 +264,18 @@ class ShelfStore:
             man["previous_sha256"] = prev
             man["updated"] = now
             man["artifacts"] = arts
-            man["rule"] = "POST /v1/artifacts; PR is fallback"
+            man["rule"] = "POST /v1/artifacts or /v1/uploads; PR is fallback"
             man["version"] = int(man.get("version") or 0) + 1
             man.pop("chain_sha256", None)
             _write_json(self.manifest_path, man)
             self.rebuild_search()
             self.publish_public()
             return {"status": "accepted", "http": 201, "receipt": receipt}
+
+        if hold_lock:
+            return _run()
+        with LOCK:
+            return _run()
 
     def lookup_sha256(self, sha256: str) -> tuple[int, dict[str, Any]]:
         if not SHA_RE.match(sha256 or ""):
@@ -429,6 +462,7 @@ class ShelfStore:
             "count_awaiting": sum(1 for x in arts if x["state"] != "live"),
             "quota": {
                 "max_object_bytes": 2 * 1024 * 1024,
+                "max_object_bytes_large": 100 * 1024 * 1024,
                 "max_shelf_bytes": MAX_SHELF_BYTES,
                 "max_live_objects": MAX_LIVE_OBJECTS,
             },
@@ -468,8 +502,10 @@ class ShelfStore:
             _write_json(self.ops / f"{op_id}.json", op)
 
 
-def _artifact_row(check, now: str) -> dict[str, Any]:
-    return {
+def _artifact_row(
+    check, now: str, *, expires_at: str | None = None
+) -> dict[str, Any]:
+    row = {
         "name": check.snapshot["name"],
         "author": check.snapshot["author"],
         "filename": check.filename,
@@ -482,6 +518,9 @@ def _artifact_row(check, now: str) -> dict[str, Any]:
         "mirror": f"https://158.178.144.114/board-showcase/{check.filename}",
         "fiction": False,
     }
+    if expires_at:
+        row["expires_at"] = expires_at
+    return row
 
 
 def _filename_from_live(live: str | None) -> str | None:
@@ -494,6 +533,16 @@ def _key_name(principal: str, key: str) -> str:
     safe_p = re.sub(r"[^A-Za-z0-9._-]+", "_", principal)[:80]
     safe_k = re.sub(r"[^A-Za-z0-9._-]+", "_", key)[:128]
     return f"{safe_p}__{safe_k}.json"
+
+
+def _namespaced_key_name(
+    principal: str, key: str, namespace: str | None = None
+) -> str:
+    base = _key_name(principal, key)
+    if not namespace:
+        return base
+    safe_ns = re.sub(r"[^A-Za-z0-9._-]+", "_", namespace)[:40]
+    return f"{safe_ns}__{base}"
 
 
 def _now() -> str:

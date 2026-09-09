@@ -12,9 +12,15 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import Any
 
-MAX_OBJECT_BYTES = 2 * 1024 * 1024  # 2 MiB
+MAX_OBJECT_BYTES = 2 * 1024 * 1024  # 2 MiB — default JSON POST lane
+MAX_OBJECT_BYTES_LARGE = 100 * 1024 * 1024  # 100 MiB — multipart large lane
 MAX_SHELF_BYTES = 256 * 1024 * 1024  # 256 MiB
 MAX_LIVE_OBJECTS = 80
+DEFAULT_TTL_SECONDS = 30 * 24 * 3600  # 30 days from accept
+STAGING_TTL_SECONDS = 24 * 3600  # 24h upload staging
+DEFAULT_PART_SIZE = 1024 * 1024  # 1 MiB
+MIN_PART_SIZE = 256 * 1024
+MAX_PART_SIZE = 8 * 1024 * 1024
 FILENAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,120}$")
 ALLOWED_EXT = {".md", ".json", ".svg", ".txt", ".html"}
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -101,9 +107,8 @@ def fingerprint_of(
     return sha256_hex(blob)
 
 
-def check_package(
+def _validate_common_meta(
     *,
-    content: bytes,
     declared_sha256: str,
     declared_bytes: int,
     name: str,
@@ -115,7 +120,17 @@ def check_package(
     shelf_live_bytes: int,
     shelf_live_count: int,
     idempotency_key: str,
+    min_bytes: int,
+    max_bytes: int,
+    content: bytes | None = None,
+    verify_hash_against_content: bool = True,
 ) -> CheckResult:
+    """Shared ACCEPT metadata checks for small and large lanes.
+
+    When content is None (large-lane init), hash is trusted as declared until
+    commit reassembles and verifies. Secrets are only scanned when content is
+    present (empty body at init cannot contain secrets).
+    """
     failures: list[CheckFailure] = []
 
     if not IDEMPOTENCY_RE.match(idempotency_key or ""):
@@ -123,28 +138,43 @@ def check_package(
             CheckFailure("idempotency_key", "must be 16–128 chars [A-Za-z0-9_-]")
         )
 
-    if not isinstance(content, (bytes, bytearray)) or not content:
-        failures.append(CheckFailure("size", "content must be non-empty bytes"))
+    try:
+        n = int(declared_bytes)
+    except (TypeError, ValueError):
+        failures.append(CheckFailure("size", "bytes must be an integer"))
         return _fail(*failures)
 
-    n = len(content)
-    if not (1 <= n <= MAX_OBJECT_BYTES):
+    if not (min_bytes <= n <= max_bytes):
         failures.append(
-            CheckFailure("size", f"bytes {n} outside 1..{MAX_OBJECT_BYTES}")
+            CheckFailure(
+                "size",
+                f"bytes {n} outside {min_bytes}..{max_bytes}",
+            )
         )
 
-    digest = sha256_hex(bytes(content))
     declared = (declared_sha256 or "").strip().lower()
     if not SHA256_RE.match(declared):
         failures.append(CheckFailure("hash", "sha256 must be 64 lowercase hex chars"))
-    elif digest != declared:
-        failures.append(
-            CheckFailure("hash", f"sha256(content)={digest} != declared={declared}")
-        )
-    if int(declared_bytes) != n:
-        failures.append(
-            CheckFailure("size", f"declared bytes {declared_bytes} != len(content) {n}")
-        )
+
+    digest = declared
+    if content is not None:
+        if not isinstance(content, (bytes, bytearray)) or not content:
+            failures.append(CheckFailure("size", "content must be non-empty bytes"))
+            return _fail(*failures)
+        actual_n = len(content)
+        if actual_n != n:
+            failures.append(
+                CheckFailure("size", f"declared bytes {n} != len(content) {actual_n}")
+            )
+        n = actual_n
+        digest = sha256_hex(bytes(content))
+        if SHA256_RE.match(declared) and verify_hash_against_content and digest != declared:
+            failures.append(
+                CheckFailure("hash", f"sha256(content)={digest} != declared={declared}")
+            )
+        secret = looks_like_secret(bytes(content))
+        if secret:
+            failures.append(secret)
 
     filename = _normalize_filename(filename or "")
     if not FILENAME_RE.match(filename):
@@ -164,10 +194,6 @@ def check_package(
             failures.append(
                 CheckFailure("type", f"extension {ext or '(none)'} not in {sorted(ALLOWED_EXT)}")
             )
-
-    secret = looks_like_secret(bytes(content))
-    if secret:
-        failures.append(secret)
 
     if not name or not str(name).strip():
         failures.append(CheckFailure("name", "name is required"))
@@ -198,8 +224,6 @@ def check_package(
             )
         )
 
-    # Quota: existing live objects; a new sha256 that is already live does not add.
-    # Caller passes current live totals excluding this digest if already present.
     if n + shelf_live_bytes > MAX_SHELF_BYTES:
         failures.append(
             CheckFailure(
@@ -225,7 +249,7 @@ def check_package(
     }
     fp = fingerprint_of(
         principal=principal,
-        sha256=digest,
+        sha256=digest if content is not None else declared,
         consent=consent_s,
         provenance=provenance,
         name=str(name).strip(),
@@ -234,8 +258,100 @@ def check_package(
     return CheckResult(
         ok=True,
         filename=filename,
-        sha256=digest,
+        sha256=digest if content is not None else declared,
         bytes_len=n,
         fingerprint=fp,
         snapshot=snap,
     )
+
+
+def check_package(
+    *,
+    content: bytes,
+    declared_sha256: str,
+    declared_bytes: int,
+    name: str,
+    filename: str,
+    provenance: dict[str, Any],
+    author: str,
+    consent: str,
+    principal: str,
+    shelf_live_bytes: int,
+    shelf_live_count: int,
+    idempotency_key: str,
+) -> CheckResult:
+    """Default JSON POST lane: 1..2 MiB with body present."""
+    return _validate_common_meta(
+        content=content,
+        declared_sha256=declared_sha256,
+        declared_bytes=declared_bytes,
+        name=name,
+        filename=filename,
+        provenance=provenance,
+        author=author,
+        consent=consent,
+        principal=principal,
+        shelf_live_bytes=shelf_live_bytes,
+        shelf_live_count=shelf_live_count,
+        idempotency_key=idempotency_key,
+        min_bytes=1,
+        max_bytes=MAX_OBJECT_BYTES,
+        verify_hash_against_content=True,
+    )
+
+
+def check_upload_init(
+    *,
+    declared_sha256: str,
+    declared_bytes: int,
+    name: str,
+    filename: str,
+    provenance: dict[str, Any],
+    author: str,
+    consent: str,
+    principal: str,
+    shelf_live_bytes: int,
+    shelf_live_count: int,
+    idempotency_key: str,
+    part_size: int | None = None,
+    reserved_bytes: int = 0,
+) -> CheckResult:
+    """Large-lane init: metadata only, size must be in (2 MiB, 100 MiB].
+
+    reserved_bytes counts other OPEN upload reservations already held.
+    """
+    # Large lane starts strictly above the small-lane cap.
+    min_large = MAX_OBJECT_BYTES + 1
+    result = _validate_common_meta(
+        content=None,
+        declared_sha256=declared_sha256,
+        declared_bytes=declared_bytes,
+        name=name,
+        filename=filename,
+        provenance=provenance,
+        author=author,
+        consent=consent,
+        principal=principal,
+        shelf_live_bytes=shelf_live_bytes + max(0, int(reserved_bytes)),
+        shelf_live_count=shelf_live_count,
+        idempotency_key=idempotency_key,
+        min_bytes=min_large,
+        max_bytes=MAX_OBJECT_BYTES_LARGE,
+        verify_hash_against_content=False,
+    )
+    if not result.ok:
+        return result
+    # part_size validation is advisory here; UploadStore enforces bounds.
+    if part_size is not None:
+        try:
+            ps = int(part_size)
+        except (TypeError, ValueError):
+            return _fail(CheckFailure("part_size", "part_size must be an integer"))
+        if not (MIN_PART_SIZE <= ps <= MAX_PART_SIZE):
+            return _fail(
+                CheckFailure(
+                    "part_size",
+                    f"part_size {ps} outside {MIN_PART_SIZE}..{MAX_PART_SIZE}",
+                )
+            )
+    return result
