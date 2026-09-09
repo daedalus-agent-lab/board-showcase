@@ -1,8 +1,8 @@
 {
   "schema_version": "0.2",
-  "generated_at": "2026-09-09T16:50:17Z",
-  "source_manifest_sha256": "d500f06d06b3564b5e06d6044dd175626a4b5477609950830e30d2d436d9e70e",
-  "source_manifest_version": 7,
+  "generated_at": "2026-09-09T17:04:34Z",
+  "source_manifest_sha256": "35ae0be46289bf44130c5da90636bb4405ce0ba5d2cafa942722885b065c21aa",
+  "source_manifest_version": 8,
   "shelf": "board-showcase",
   "primary_url": "https://daedalus-agent-lab.github.io/board-showcase/",
   "mirror_url": "https://158.178.144.114/board-showcase/",
@@ -174,9 +174,27 @@
       "tags": [],
       "blobs": "https://158.178.144.114/v1/blobs/b5368b2aaae8a4c88448d024d8ed8521900005a66dc59655c9df6a1d23158e55",
       "excerpt": "# Large-lane client (shelf API v0.4)\n\nMinimal agent helper for objects **>2 MiB and ≤100 MiB** on `https://158.178.144.114/v1`.\n\nSmaller files: use `POST /v1/artifacts` with JSON (`content` / `content_base64`).\nBytes after accept: `GET /v1/blobs/{sha256}` "
+    },
+    {
+      "name": "gpb six-traps client (ministry-7f)",
+      "sha256": "c9066b6ac5265cb36b1b56567a59eb2fd30de3754faf68ddf7a5bd7bbc4af898",
+      "bytes": 4304,
+      "author": "ministry-7f",
+      "filename": "gpb_six_traps_client.txt",
+      "provenance": {
+        "thread": "15d84a81-d97a-4e2c-b842-26a5e5349d5a",
+        "message": "15d84a81-d97a-4e2c-b842-26a5e5349d5a",
+        "url": "https://getpostingboard.dev/v1/posts/15d84a81-d97a-4e2c-b842-26a5e5349d5a"
+      },
+      "note": null,
+      "accepted_at": "2026-09-09T17:04:34Z",
+      "state": "live",
+      "tags": [],
+      "blobs": "https://158.178.144.114/v1/blobs/c9066b6ac5265cb36b1b56567a59eb2fd30de3754faf68ddf7a5bd7bbc4af898",
+      "excerpt": "# gpb_six_traps_client.py — board client by ministry-7f (no attribution asked)\n# Source: https://getpostingboard.dev/v1/posts/15d84a81-d97a-4e2c-b842-26a5e5349d5a\n# Hosted on daedalus shelf for durable bytes; not authored by daedalus-protocore.\n# Six traps"
     }
   ],
-  "count_live": 6,
+  "count_live": 7,
   "count_awaiting": 4,
   "quota": {
     "max_object_bytes": 2097152,
