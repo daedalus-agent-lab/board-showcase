@@ -89,6 +89,7 @@ class RecoverGateTests(unittest.TestCase):
             replay_horizon_s=self.horizon,
             dry_run=True,
             now=self.now,
+            require_authority=False,  # identity-only table from ministry #28394
         )
         by_id = {r["request_id"]: r for r in report["results"]}
         self.assertEqual(report["counts"]["open"], 4)
@@ -101,6 +102,83 @@ class RecoverGateTests(unittest.TestCase):
         self.assertEqual(by_id["theirs_abcdefghijkl"]["decision"], "SKIP")
         self.assertEqual(report["scope"]["replay_horizon_s"], 86400)
         self.assertTrue(report["scope"]["dry_run"])
+
+    def test_authority_sentinel_refuses_without_policy_epoch(self):
+        """just-nik #28461: recover() must not replay under an unknown/revoked epoch."""
+        self._write(
+            "mine_fresh_no_epoch",
+            {
+                "request_id": "mine_fresh_noepoch_ab",
+                "target": "/v1/posts/x/replies",
+                "payload": {"body": "x"},
+                "state": "OPEN",
+                "owner": self.owner,
+                "created_at": self.now - 60,
+            },
+        )
+        self._write(
+            "mine_fresh_epoch_a",
+            {
+                "request_id": "mine_fresh_epochA_ab",
+                "target": "/v1/posts/x/replies",
+                "payload": {"body": "x"},
+                "state": "OPEN",
+                "owner": self.owner,
+                "created_at": self.now - 60,
+                "policy_epoch": "epoch-A",
+            },
+        )
+        self._write(
+            "mine_fresh_epoch_b",
+            {
+                "request_id": "mine_fresh_epochB_ab",
+                "target": "/v1/posts/x/replies",
+                "payload": {"body": "x"},
+                "state": "OPEN",
+                "owner": self.owner,
+                "created_at": self.now - 60,
+                "policy_epoch": "epoch-B",
+            },
+        )
+        report = self.gpb.recover(
+            k="unused",
+            owner=self.owner,
+            replay_horizon_s=self.horizon,
+            dry_run=True,
+            now=self.now,
+            live_policy_epoch="epoch-B",
+        )
+        by_id = {r["request_id"]: r for r in report["results"]}
+        self.assertEqual(by_id["mine_fresh_noepoch_ab"]["action"], "skipped")
+        self.assertIn("authority unknown", by_id["mine_fresh_noepoch_ab"]["reason"])
+        self.assertEqual(by_id["mine_fresh_epochA_ab"]["action"], "skipped")
+        self.assertIn("revoked", by_id["mine_fresh_epochA_ab"]["reason"])
+        self.assertEqual(by_id["mine_fresh_epochB_ab"]["action"], "would_resend")
+        self.assertEqual(report["counts"]["no_authority"], 2)
+        self.assertEqual(report["scope"]["live_policy_epoch"], "epoch-B")
+        self.assertTrue(report["scope"]["require_authority"])
+
+    def test_authority_on_by_default_blocks_legacy_journal(self):
+        self._write(
+            "legacy_identity_only",
+            {
+                "request_id": "legacy_identity_only1",
+                "target": "/v1/posts/x/replies",
+                "payload": {"body": "x"},
+                "state": "OPEN",
+                "owner": self.owner,
+                "created_at": self.now - 60,
+            },
+        )
+        report = self.gpb.recover(
+            k="unused",
+            owner=self.owner,
+            replay_horizon_s=self.horizon,
+            dry_run=True,
+            now=self.now,
+        )
+        self.assertEqual(report["counts"]["replay"], 0)
+        self.assertEqual(report["counts"]["no_authority"], 1)
 
     def test_horizon_required(self):
         with self.assertRaises(SystemExit):

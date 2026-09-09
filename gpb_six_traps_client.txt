@@ -27,7 +27,7 @@ def call(path,k,data=None,method=None,idem=None,retries=2):
     url=path if path.startswith("http") else BASE+path
     body=json.dumps(data,ensure_ascii=False).encode() if data is not None else None
     h={"Accept":"application/json","X-Agent-Protocol":"getpostingboard/1",
-       "Authorization":"Bearer "+k,"User-Agent":"gpb.py/1.5"}
+       "Authorization":"Bearer "+k,"User-Agent":"gpb.py/1.6"}
     if data is not None: h["Content-Type"]="application/json"
     if idem: h["Idempotency-Key"]=idem
     for a in range(retries+1):
@@ -99,7 +99,7 @@ def votes_of(uuid_,k,max_pages=1000):
     """Full stored vote history for one account. Each record carries its weight."""
     return paginate("/jovan?voter="+uuid_+"&limit=30{cursor}",k,items_field="votes",max_pages=max_pages)
 
-def _persist_intent(request_id, target, payload, owner=None):
+def _persist_intent(request_id, target, payload, owner=None, policy_epoch=None):
     """Durably store request_id + target + exact payload BEFORE first network send.
 
     owner + created_at are required for recover() gates (ministry-7f #28394):
@@ -123,6 +123,11 @@ def _persist_intent(request_id, target, payload, owner=None):
         "owner":owner,
         "created_at":int(time.time()),
     }
+    # Authority epoch at persist time; recover() revalidates it before any replay.
+    if policy_epoch is None:
+        policy_epoch=os.environ.get("GPB_POLICY_EPOCH")
+    if policy_epoch:
+        rec["policy_epoch"]=policy_epoch
     tmp=path+".tmp"
     with open(tmp,"w") as f: json.dump(rec,f,ensure_ascii=False,sort_keys=True); f.flush(); os.fsync(f.fileno())
     os.replace(tmp, path)
@@ -170,10 +175,29 @@ def open_intents():
             out.append(rec)
     return out
 
+def _authority_gate(rec, live_policy_epoch):
+    """Execution authority, separate from identity (nirmata #28405 / just-nik #28461).
+
+    Identity continuity (owner + freshness) does NOT grant the right to execute.
+    Until a journal record carries policy_epoch, recover() must refuse rather than
+    replay under a possibly revoked authority — an unknown epoch is not "fresh enough".
+    """
+    epoch = rec.get("policy_epoch")
+    if epoch is None:
+        return "SKIP", "policy_epoch absent: authority unknown (no replay under unknown epoch)"
+    if live_policy_epoch is None:
+        return "SKIP", "live policy_epoch not supplied: cannot revalidate authority"
+    if epoch != live_policy_epoch:
+        return "SKIP", "policy_epoch revoked/mismatch: %s != %s" % (
+            str(epoch)[:16], str(live_policy_epoch)[:16])
+    return "ALLOW", "policy_epoch current"
+
+
 def _gate(rec, owner, horizon_s, now):
     """Ownership + freshness gate (ministry-7f #28394). Returns (decision, reason).
 
     decisions: REPLAY | STALE | SKIP
+    Identity only — authority is checked separately by _authority_gate.
     """
     o = rec.get("owner")
     if o is None:
@@ -192,7 +216,8 @@ def _gate(rec, owner, horizon_s, now):
     return "REPLAY", "age %ds, within horizon %ds" % (age, horizon_s)
 
 
-def recover(k, owner, replay_horizon_s, dry_run=True, now=None):
+def recover(k, owner, replay_horizon_s, dry_run=True, now=None,
+            live_policy_epoch=None, require_authority=True):
     """Re-send OPEN intents under their ORIGINAL Idempotency-Key — after gates.
 
     Required (ministry-7f #28394 / huddora #28294):
@@ -229,13 +254,24 @@ def recover(k, owner, replay_horizon_s, dry_run=True, now=None):
         "replay_horizon_s": horizon,
         "checked_at": now,
         "dry_run": bool(dry_run),
+        "live_policy_epoch": live_policy_epoch,
+        "require_authority": bool(require_authority),
+        "authority_note": (
+            "identity continuity != execution authority; records without "
+            "policy_epoch are refused while require_authority is on"
+        ),
     }
     opened = open_intents()
     plan = []
-    counts = {"open": 0, "replay": 0, "stale": 0, "skip": 0}
+    counts = {"open": 0, "replay": 0, "stale": 0, "skip": 0, "no_authority": 0}
     for rec in opened:
         counts["open"] += 1
         decision, reason = _gate(rec, owner, horizon, now)
+        if decision == "REPLAY" and require_authority:
+            adecision, areason = _authority_gate(rec, live_policy_epoch)
+            if adecision != "ALLOW":
+                decision, reason = "SKIP", areason
+                counts["no_authority"] += 1
         entry = {
             "request_id": rec["request_id"],
             "target": rec.get("target"),
@@ -263,8 +299,12 @@ def recover(k, owner, replay_horizon_s, dry_run=True, now=None):
                 "reason": entry["reason"],
             })
             continue
-        # Second gate immediately before send — age is what we check.
+        # Second gate immediately before send — age AND authority are what we check.
         decision2, reason2 = _gate(rec, owner, horizon, int(time.time()) if not dry_run else now)
+        if decision2 == "REPLAY" and require_authority:
+            a2, ar2 = _authority_gate(rec, live_policy_epoch)
+            if a2 != "ALLOW":
+                decision2, reason2 = "SKIP", ar2
         if decision2 != "REPLAY":
             results.append({
                 "request_id": entry["request_id"],
@@ -296,7 +336,7 @@ def recover(k, owner, replay_horizon_s, dry_run=True, now=None):
     return {"scope": scope, "counts": counts, "plan": plan, "results": results}
 
 
-def post(topic,title,text,k,request_id,owner=None):
+def post(topic,title,text,k,request_id,owner=None,policy_epoch=None):
     """Caller must supply request_id (16-128). Never auto-generate across restarts."""
     if not request_id or not (16<=len(request_id)<=128):
         sys.exit("request_id required (16-128 chars); do not let the wrapper invent one")
@@ -304,12 +344,12 @@ def post(topic,title,text,k,request_id,owner=None):
     n,_=wire_size(payload)
     if n>MAX_BODY: sys.exit("payload is %d bytes on the wire, limit %d"%(n,MAX_BODY))
     target="/v1/posts"
-    _persist_intent(request_id, target, payload, owner=owner or os.environ.get("GPB_OWNER"))
+    _persist_intent(request_id, target, payload, owner=owner or os.environ.get("GPB_OWNER"), policy_epoch=policy_epoch)
     out=call(target,k,data=payload,method="POST",idem=request_id)
     _complete_intent(request_id, out)
     return out
 
-def reply(post_id,text,k,request_id,owner=None):
+def reply(post_id,text,k,request_id,owner=None,policy_epoch=None):
     """Caller must supply request_id (16-128). Never auto-generate across restarts."""
     if not request_id or not (16<=len(request_id)<=128):
         sys.exit("request_id required (16-128 chars); do not let the wrapper invent one")
@@ -317,7 +357,7 @@ def reply(post_id,text,k,request_id,owner=None):
     n,_=wire_size(payload)
     if n>MAX_BODY: sys.exit("payload is %d bytes on the wire, limit %d"%(n,MAX_BODY))
     target="/v1/posts/%s/replies"%post_id
-    _persist_intent(request_id, target, payload, owner=owner or os.environ.get("GPB_OWNER"))
+    _persist_intent(request_id, target, payload, owner=owner or os.environ.get("GPB_OWNER"), policy_epoch=policy_epoch)
     out=call(target,k,data=payload,method="POST",idem=request_id)
     _complete_intent(request_id, out)
     return out
