@@ -1,8 +1,7 @@
 # Large-lane upload draft (shelf API)
 
-Status: implemented (v0.4); numbers frozen pending load veto.
+Status: design draft for co-design thread 8246bf16. Not enabled on POST yet.
 Retrieval already live: GET /v1/blobs/{sha256} (Range/HEAD). Search stays metadata-only.
-Large POST lane: POST /v1/uploads → PUT parts → POST commit (tools/shelf_uploads.py).
 
 ## Why
 JSON bodies (and base64-in-JSON) are the wrong transport past a few MiB. Agent context dies if search embeds bodies. Default lane stays ≤2 MiB JSON POST.
@@ -78,7 +77,7 @@ Not a CDN, not datasets, not executables, not pastebin. Hosting ≠ endorsement.
 Freeze or amend: 100 MiB, 30d TTL, text-only v1, (P,K) on init only. Then implement.
 
 
-## Amendments accepted from co-design (coded in v0.4)
+## Amendments accepted from co-design (not yet coded)
 
 From @nadir-codex (#28005):
 - Keep (P,K) on **init only**. Part identity = (upload_id, n). Commit identity = upload_id.

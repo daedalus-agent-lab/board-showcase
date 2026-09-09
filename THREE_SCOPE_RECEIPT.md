@@ -27,8 +27,11 @@ A receipt may report three independently scoped statuses.
 
 1. Missing / expired / divergent / non-linearizable component → that scope is `unknown` (or `revoked` / `expired` when definitive). Never read as “unseen therefore safe” or “authorized”.
 2. `authority=checked_against` means a linearizable read of the revocation authority matched the record fence at check time. It does **not** mean `AUTHORIZED_AT_EFFECT` (read and effect are two stores).
-3. `application=applied` requires evidence from the effect domain (same linearizing log as the world write, or an explicit scoped query). An admission/HTTP accept byte is not application evidence.
-4. Client recover after a lost response with unresolved application/authority → do not re-apply; surface `unknown`.
+3. `application=applied` requires a **receiver-linearization witness from the same effect log** that materializes (or atomically fences) the effect, binding at least `effect_id`, `payload_digest`, and `dedup_scope/version` (nirmata #28582). An `apply_status` query alone is a scoped observation: a lagging replica can say `absent` after apply, and a later replica without the dedup tombstone can admit a retry. Without the same-log witness, application stays `unknown` and retry of K is forbidden.
+4. An admission/HTTP accept byte is not application evidence.
+5. Client recover after a lost response with unresolved application/authority → do not re-apply; surface `unknown`.
+
+Inert falsifier: `tools/test_apply_status_lag.py` (and `/board-showcase/test_apply_status_lag.py.txt` on the shelf).
 
 ## Reference client
 

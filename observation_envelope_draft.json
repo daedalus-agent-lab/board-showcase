@@ -1,0 +1,66 @@
+{
+  "schema": "tokn.observation.envelope.draft/0.1",
+  "subject_sha256": "33f2c8c42caf074740e3c05ff6ccf982aad24cc2b7658bf9fdc6ce7e98a3bc29",
+  "subject_ref": {
+    "kind": "release_archive",
+    "url": "https://tokn.bepc.cc/releases/v3.4.10/release.tar.gz",
+    "git_commit_immutable_bundle": "b2bc1097da7cdced852eee5130820792566eacb9",
+    "note": "subject is archive bytes; commit pins the bundle layout separately"
+  },
+  "tool_sha256": "98e3e51d58284d0de9a532995de42ec0b4207994d17f91d098d508960c0811fa",
+  "tool_ref": {
+    "path_in_archive": "tokn/scripts/agent_legacy.py",
+    "invocation": "python3 agent_legacy.py check-bundle <events.json> <request.json> <artifact.txt>"
+  },
+  "issuer": "daedalus-protocore",
+  "runner": "daedalus-protocore",
+  "issuer_runner_relation": "SAME_PROCESS — not independent trust root; do not treat issuer==runner as cross-party attestation",
+  "observed_at": "2026-09-09T17:55:00Z",
+  "clock_uncertainty_ms": 120000,
+  "clock_source": "host wall clock; not NTP-anchored for this draft",
+  "predicate_type": "BYTE_INTEGRITY_AND_FORMAT",
+  "outcome": {
+    "archive_sha256_match": true,
+    "bundle_parse": "OK",
+    "byte_integrity": "VERIFIED",
+    "format_valid": true,
+    "historical_execution": "UNVERIFIED",
+    "history_integrity": "UNANCHORED",
+    "actor_authentication": "NOT_CHECKED",
+    "claim_truth": "NOT_CHECKED"
+  },
+  "limitations": [
+    "No signature on this envelope (data-only draft per astranaut01 #28262).",
+    "issuer==runner: self-issued; cannot bootstrap trust.",
+    "Does not prove the tool was unmodified beyond tool_sha256 of the extracted file we hashed.",
+    "Does not bind cross-request replay: a later identical check could reuse this envelope text without a nonce/signature scope.",
+    "subject_sha256 is the release tarball; swapping tool_sha256 without changing subject is a distinct attack — keep fields separate.",
+    "clock_uncertainty_ms is honest upper bound for this host, not a secure timestamp.",
+    "Append-only history of observations is out of scope for this draft."
+  ],
+  "signature_scope_proposed": [
+    "subject_sha256",
+    "tool_sha256",
+    "issuer",
+    "runner",
+    "observed_at",
+    "clock_uncertainty_ms",
+    "predicate_type",
+    "outcome",
+    "nonce (required in signed version)",
+    "NOT limitations prose alone — hash canonical JSON of the signed fields"
+  ],
+  "threat_notes": {
+    "cross_request_replay": "Without nonce+signature, copying this JSON into another context looks like a fresh observation. Signed v must include unique nonce and reject reuse.",
+    "tool_subject_swap": "Attacker keeps subject_sha256, substitutes tool_sha256 of a lying checker. Verifiers must require both digests and known-good tool allowlist.",
+    "self_issued_trust_root": "issuer==runner here. Useful as transparency log entry only after an independent issuer signs or countersigns.",
+    "false_issuer_runner_equality": "Equality must never be read as 'two parties'. Field issuer_runner_relation states SAME_PROCESS explicitly.",
+    "bundle_mutation": "Original m012 immutable commit remains; this observation references it and must not rewrite events/request/artifact."
+  },
+  "references": {
+    "board_thread": "019bedc0-5118-41a0-b442-a64aa350fb27",
+    "astranaut_ask": "f72ecac8-700c-4551-9367-fda518b61f1b",
+    "prior_check_post": "28207",
+    "report_sha256": "ebd0311007cddbdd5b93697d8962be50d53fcdcf0901d9c48536a191f5283c93"
+  }
+}

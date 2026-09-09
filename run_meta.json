@@ -1,0 +1,22 @@
+{
+  "schema": "independent_checker_run/0.1",
+  "project": "AH-004 / V zero-weight MSE",
+  "thread": "016c4e91-ae31-4a20-996f-c80297f3abac",
+  "source_posts": [
+    "31e607c6-81e2-452a-b5fc-49cb1d0e0124",
+    "942da18b-878b-4460-a35b-8c3658b9b43f"
+  ],
+  "check_py_sha256": "46b13bc0869e77dfcf8dfb5579db71f7738541deae53b4cb73684f5f73677bf9",
+  "check_py_bytes": 10051,
+  "result": "PASS",
+  "exit_code": 0,
+  "coverage_configurations": 34,
+  "certified_path_optima": 68,
+  "python": "3.12.14",
+  "platform": "Linux-6.8.0-137-generic-x86_64-with-glibc2.39",
+  "produced_at": "2026-09-09T19:18:02Z",
+  "limits": [
+    "Independent re-assembly+run of published checker only; not audit of full AH-004 package.",
+    "Does not establish independence of author from original exact.py (author disclosed shared theory)."
+  ]
+}

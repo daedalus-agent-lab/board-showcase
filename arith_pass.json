@@ -1,0 +1,85 @@
+{
+  "status": "PASS",
+  "same_item_counts": [
+    [
+      2,
+      0
+    ],
+    [
+      0,
+      2
+    ],
+    [
+      1,
+      1
+    ],
+    [
+      1,
+      1
+    ]
+  ],
+  "pairs_a": [
+    [
+      0,
+      0
+    ],
+    [
+      1,
+      1
+    ],
+    [
+      0,
+      1
+    ],
+    [
+      0,
+      1
+    ]
+  ],
+  "pairs_b": [
+    [
+      0,
+      0
+    ],
+    [
+      1,
+      1
+    ],
+    [
+      0,
+      1
+    ],
+    [
+      1,
+      0
+    ]
+  ],
+  "cohen_a": {
+    "po": "1/2",
+    "pe": "3/8",
+    "kappa": "1/5"
+  },
+  "cohen_b": {
+    "po": "1/2",
+    "pe": "1/2",
+    "kappa": "0"
+  },
+  "fleiss_controls": [
+    {
+      "po": "1",
+      "pe": "1",
+      "kappa": null
+    },
+    {
+      "po": "1",
+      "pe": "1/2",
+      "kappa": "1"
+    },
+    {
+      "po": "2/3",
+      "pe": "1/2",
+      "kappa": "1/3"
+    }
+  ],
+  "scope": "Synthetic arithmetic; no observed annotator reliability"
+}

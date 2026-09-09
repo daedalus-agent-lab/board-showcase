@@ -1,0 +1,235 @@
+"""Exact, separately written certificate checks; Python standard library only.
+
+No upstream imports. The AH-004 proof, examples and exact.py were read.
+This verifies supplied/analytically constructed optima, not a general QP solver.
+"""
+from fractions import Fraction as F
+from itertools import product
+from pathlib import Path
+import hashlib
+import json
+import platform
+import sys
+
+
+def dot(a, b):
+    return sum((x * y for x, y in zip(a, b)), F(0))
+
+
+def fm_feasible(rows, bounds, dimension):
+    """Exact elimination; infeasibility includes checked original-row weights."""
+    count = len(bounds)
+    system = [(tuple(map(F, a)), F(b), tuple(F(i == j) for j in range(count)))
+              for i, (a, b) in enumerate(zip(rows, bounds))]
+    for column in reversed(range(dimension)):
+        upper = [r for r in system if r[0][column] > 0]
+        lower = [r for r in system if r[0][column] < 0]
+        combined = [r for r in system if not r[0][column]]
+        for a, b, v in upper:
+            for c, d, u in lower:
+                ap, cp = a[column], -c[column]
+                combined.append((tuple(x / ap + y / cp for x, y in zip(a, c)),
+                                 b / ap + d / cp,
+                                 tuple(x / ap + y / cp for x, y in zip(v, u))))
+        unique = {}
+        for a, b, v in combined:
+            if not any(a):
+                if b < 0:
+                    assert all(t >= 0 for t in v)
+                    assert all(sum(v[i] * rows[i][j] for i in range(count)) == 0
+                               for j in range(dimension))
+                    assert dot(v, bounds) < 0
+                    return False, v
+                continue
+            divisor = abs(next(x for x in a if x))
+            key = tuple(x / divisor for x in a)
+            normalized = (key, b / divisor, tuple(t / divisor for t in v))
+            if key not in unique or normalized[1] < unique[key][1]:
+                unique[key] = normalized
+        system = list(unique.values())
+    return True, None
+
+
+QVALUES = tuple(map(F, [1, F(5, 8), -1, F(1, 4), 0]))
+DELTA = F(1, 3)
+
+
+def comparisons(selected, competitors, q=QVALUES):
+    rows, bounds = [], []
+    for other in competitors:
+        row = [F(0)] * len(q)
+        row[other], row[selected] = F(1), F(-1)
+        rows.append(tuple(row))
+        bounds.append(q[selected] - q[other])
+    return rows, bounds
+
+
+ROOT_A, ROOT_B = comparisons(2, [0, 1])
+PATH_A, PATH_B = comparisons(1, [0, 2])
+end_a, end_b = comparisons(4, [3])
+PATH_A += end_a
+PATH_B += end_b
+
+
+def verify_kkt(a, b, w, e, multipliers):
+    assert len(e) == len(w) and len(multipliers) == len(b)
+    assert all(dot(row, e) <= bound for row, bound in zip(a, b))
+    assert all(t >= 0 for t in multipliers)
+    assert all(2 * w[j] * e[j] + sum(t * row[j] for t, row in zip(multipliers, a)) == 0
+               for j in range(len(e)))
+    assert all(t * (dot(row, e) - bound) == 0
+               for t, row, bound in zip(multipliers, a, b))
+    return sum(wi * ei * ei for wi, ei in zip(w, e))
+
+
+def pair_witness(gap, keep_weight, target_weight):
+    if keep_weight + target_weight == 0:
+        return -gap, F(0), F(0)
+    den = keep_weight + target_weight
+    return (-gap * target_weight / den, gap * keep_weight / den,
+            2 * gap * keep_weight * target_weight / den)
+
+
+def enter_witness(w):
+    ex, en, first_dual = pair_witness(F(3, 8), w[0], w[1])
+    keep, obstruct, last_dual = pair_witness(F(1, 4), w[3], w[4])
+    e = (ex, en, F(0), keep, obstruct)
+    dual = (first_dual, F(0), last_dual)
+    cost = verify_kkt(PATH_A, PATH_B, w, e, dual)
+    return dict(cost=cost, error=e, multipliers=dual)
+
+
+def root_witness(w):
+    # Enumerate the two hinge pieces; unmeasured competitors may move freely.
+    if w[2] == 0:
+        e = (F(0), F(0), F(2), F(0), F(0))
+        dual = (F(0), F(0))
+    else:
+        measured = [i for i in [0, 1] if w[i] > 0]
+        for bits in product([False, True], repeat=len(measured)):
+            active = [i for i, chosen in zip(measured, bits) if chosen]
+            y = (w[2] * QVALUES[2] + sum(w[i] * QVALUES[i] for i in active)) / (
+                w[2] + sum(w[i] for i in active))
+            if not all((QVALUES[i] >= y if i in active else QVALUES[i] <= y)
+                       for i in measured):
+                continue
+            e = (min(F(0), y - QVALUES[0]), min(F(0), y - QVALUES[1]),
+                 y - QVALUES[2], F(0), F(0))
+            dual = (-2 * w[0] * e[0], -2 * w[1] * e[1])
+            break
+        else:
+            raise AssertionError('No analytic root candidate')
+    cost = verify_kkt(ROOT_A, ROOT_B, w, e, dual)
+    return dict(cost=cost, error=e, multipliers=dual)
+
+
+def allowed(indices, scores):
+    paired = {(j, bit): scores[j] + DELTA * bit for j in indices for bit in [0, 1]}
+    highest = max(paired.values())
+    return {action for action, value in paired.items() if value == highest}
+
+
+def direct_bad(e):
+    scores = [q + error for q, error in zip(QVALUES, e)]
+    first = allowed([0, 1, 2], scores)
+    assert all(bit == 1 for _, bit in first)
+    return (2, 1) in first or ((1, 1) in first and (4, 1) in allowed([3, 4], scores))
+
+
+def kernel_feasible(a, b, weights):
+    rows, bounds = list(a), list(b)
+    for j, w in enumerate(weights):
+        if w > 0:
+            for sign in [-1, 1]:
+                rows.append(tuple(F(sign if k == j else 0) for k in range(len(weights))))
+                bounds.append(F(0))
+    return fm_feasible(rows, bounds, len(weights))
+
+
+def run():
+    # All coverage supports for this particular five-coordinate tree.
+    coverage = []
+    for mask in product([0, 1], repeat=5):
+        size = sum(mask)
+        coverage.append(tuple(F(bit, size) if size else F(0) for bit in mask))
+    # Unequal positive weights also exercise an inactive root competitor.
+    coverage += [tuple(F(x, 100) for x in values)
+                 for values in [(90, 1, 1, 4, 4), (1, 90, 1, 4, 4)]]
+    cases = []
+    for w in coverage:
+        root, path = root_witness(w), enter_witness(w)
+        for a, b, witness in [(ROOT_A, ROOT_B, root), (PATH_A, PATH_B, path)]:
+            feasible, _ = kernel_feasible(a, b, w)
+            assert feasible == (witness['cost'] == 0)
+            assert direct_bad(witness['error'])
+            if feasible:
+                assert all(e == 0 for e, wi in zip(witness['error'], w) if wi > 0)
+        threshold = min(root['cost'], path['cost'])
+        winner = root if root['cost'] <= path['cost'] else path
+        if threshold > 0:
+            # Check a below-boundary point; KKT establishes ALL lower-cost points.
+            assert not direct_bad(tuple(e / 2 for e in winner['error']))
+        cases.append(dict(weights=w, root=root, enter=path, threshold=threshold,
+                          normalized_mse=sum(w) == 1))
+    equal = next(row for row in cases if row['weights'] == (F(1, 5),) * 5)
+    assert equal['threshold'] == F(13, 640)
+    assert equal['root']['cost'] == F(217, 480)
+    blind_downstream = next(row for row in cases if row['weights'] ==
+                           (F(1, 3), F(1, 3), F(1, 3), F(0), F(0)))
+    assert blind_downstream['threshold'] == F(3, 128)
+    assert kernel_feasible(*comparisons(4, [3]), blind_downstream['weights'])[0]
+    # Unbounded common-error line: every error equals one scalar, so no bad path.
+    links_a, links_b = [], []
+    for j in range(1, 5):
+        row = tuple(F(1 if k == j else -1 if k == 0 else 0) for k in range(5))
+        links_a.extend([row, tuple(-x for x in row)])
+        links_b.extend([F(0), F(0)])
+    linked_certificates = []
+    for a, b in [(ROOT_A, ROOT_B), (PATH_A, PATH_B)]:
+        feasible, cert = fm_feasible(a + links_a, b + links_b, 5)
+        assert not feasible
+        linked_certificates.append(dict(A=a + links_a, b=b + links_b, farkas=cert))
+    # Closed convex but nonpolyhedral C, one-step rewards (1,0,0).
+    # e=(x,-y,z), x,y,z>=0 and x*y>=z*z. Only e[0] is measured.
+    nonlinear = []
+    for n in [1, 2, 3, 5, 10, 100, 1000]:
+        x, z = F(1, n), F(n + 1, n)
+        y = z * z / x
+        error = (x, -y, z)
+        assert x * y == z * z and min(x, y, z) >= 0
+        assert (2, 1) in allowed([0, 1, 2], [1 + x, -y, z])
+        nonlinear.append(dict(n=n, error=error, mse=x*x))
+    for y in [F(0), F(1), F(1000)]:
+        assert (2, 1) not in allowed([0, 1, 2], [F(1), -y, F(0)])
+    # Mutations: expected wrong claims must be contradicted by exact witnesses.
+    controls = {
+        'replace_strict_threshold_by_non_strict': direct_bad(equal['enter']['error']),
+        'any_zero_weight_implies_zero_threshold': blind_downstream['threshold'] > 0,
+        'local_zero_threshold_is_reachable_zero_threshold': blind_downstream['threshold'] > 0,
+        'structural_links_can_be_dropped': len(linked_certificates) == 2,
+        'closed_convex_set_always_attains_psd_minimum': all(r['mse'] > 0 for r in nonlinear),
+    }
+    assert all(controls.values())
+    return dict(status='PASS', coverage_configurations=len(cases),
+                certified_path_optima=2 * len(cases),
+                kernel_feasibility_crosschecks=2 * len(cases),
+                all_zero_case_is_not_a_probability_distribution=True,
+                cases=cases, common_error_line=linked_certificates,
+                nonlinear_sequence=nonlinear, falsification_controls=controls,
+                limits='Exact finite fixtures and certificates; universal claims use RESULT.md proof.')
+
+
+def encode(value):
+    if isinstance(value, F):
+        return str(value)
+    raise TypeError(type(value).__name__)
+
+
+if __name__ == '__main__':
+    if not __debug__:
+        raise SystemExit('Run without -O: assertions are the certificate checks.')
+    result = run()
+    result['environment'] = dict(python=platform.python_version(),
+                                 platform=platform.platform(), executable=sys.executable,
+                                 checker_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
+    print(json.dumps(result, default=encode, ensure_ascii=False, indent=2))
