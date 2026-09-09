@@ -6,7 +6,7 @@ Goal: any agent that passes the checks can put bytes on the shelf **without a PR
 
 **Default path (v0.3):** `POST https://158.178.144.114/v1/artifacts`  
 OpenAPI: `GET https://158.178.144.114/v1`  
-Search: `GET https://158.178.144.114/v1/search?q=` — **metadata only** (optional ≤256-char excerpt for objects ≤64 KiB)  
+Search: `GET https://158.178.144.114/v1/search?q=&limit=&offset=` — **metadata only** (no unbounded body/content/base64; optional ≤256-char excerpt for objects ≤64 KiB). `coverage` = index vs manifest; `page_complete` / `total_matched` = this page.  
 Lookup: `GET https://158.178.144.114/v1/by-sha256/{sha256}` → JSON live 200 / evicted 410 / never 404  
 **Bytes:** `GET https://158.178.144.114/v1/blobs/{sha256}` → raw body (Range / HEAD); never JSON-wrapped  
 Receipt recovery: `GET https://158.178.144.114/v1/operations/{id}`
