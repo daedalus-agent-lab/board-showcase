@@ -104,7 +104,7 @@ class RecoverGateTests(unittest.TestCase):
         self.assertTrue(report["scope"]["dry_run"])
 
     def test_authority_sentinel_refuses_without_policy_epoch(self):
-        """just-nik #28461: recover() must not replay under an unknown/revoked epoch."""
+        """just-nik #28461 + huddora #28524: absent epoch = SKIP; carried live = UNKNOWN."""
         self._write(
             "mine_fresh_no_epoch",
             {
@@ -140,7 +140,8 @@ class RecoverGateTests(unittest.TestCase):
                 "policy_epoch": "epoch-B",
             },
         )
-        report = self.gpb.recover(
+        # Carried live_policy_epoch without linearizable_read → UNKNOWN, not ALLOW.
+        report_carried = self.gpb.recover(
             k="unused",
             owner=self.owner,
             replay_horizon_s=self.horizon,
@@ -148,14 +149,36 @@ class RecoverGateTests(unittest.TestCase):
             now=self.now,
             live_policy_epoch="epoch-B",
         )
+        by_c = {r["request_id"]: r for r in report_carried["results"]}
+        self.assertEqual(by_c["mine_fresh_noepoch_ab"]["decision"], "SKIP")
+        self.assertIn("authority unknown", by_c["mine_fresh_noepoch_ab"]["reason"])
+        self.assertEqual(by_c["mine_fresh_epochA_ab"]["decision"], "UNKNOWN")
+        self.assertIn("self-attestation", by_c["mine_fresh_epochA_ab"]["reason"])
+        self.assertEqual(by_c["mine_fresh_epochB_ab"]["decision"], "UNKNOWN")
+        self.assertEqual(by_c["mine_fresh_epochB_ab"]["action"], "skipped")
+        self.assertEqual(report_carried["counts"]["unknown"], 2)
+        self.assertEqual(report_carried["counts"]["replay"], 0)
+
+        # Linearizable read: mismatch SKIP, match would_resend (CHECKED_AGAINST).
+        report = self.gpb.recover(
+            k="unused",
+            owner=self.owner,
+            replay_horizon_s=self.horizon,
+            dry_run=True,
+            now=self.now,
+            live_policy_epoch="epoch-B",
+            epoch_source="linearizable_read",
+        )
         by_id = {r["request_id"]: r for r in report["results"]}
         self.assertEqual(by_id["mine_fresh_noepoch_ab"]["action"], "skipped")
         self.assertIn("authority unknown", by_id["mine_fresh_noepoch_ab"]["reason"])
         self.assertEqual(by_id["mine_fresh_epochA_ab"]["action"], "skipped")
+        self.assertEqual(by_id["mine_fresh_epochA_ab"]["decision"], "SKIP")
         self.assertIn("revoked", by_id["mine_fresh_epochA_ab"]["reason"])
         self.assertEqual(by_id["mine_fresh_epochB_ab"]["action"], "would_resend")
         self.assertEqual(report["counts"]["no_authority"], 2)
         self.assertEqual(report["scope"]["live_policy_epoch"], "epoch-B")
+        self.assertEqual(report["scope"]["epoch_source"], "linearizable_read")
         self.assertTrue(report["scope"]["require_authority"])
 
     def test_authority_on_by_default_blocks_legacy_journal(self):
@@ -179,6 +202,33 @@ class RecoverGateTests(unittest.TestCase):
         )
         self.assertEqual(report["counts"]["replay"], 0)
         self.assertEqual(report["counts"]["no_authority"], 1)
+        self.assertEqual(report["results"][0]["decision"], "SKIP")
+
+    def test_unknown_when_live_epoch_missing_on_epoch_bearing_record(self):
+        """huddora #28524: looks valid but unverified → UNKNOWN, not SKIP."""
+        self._write(
+            "mine_fresh_epoch_only",
+            {
+                "request_id": "mine_fresh_epoch_only1",
+                "target": "/v1/posts/x/replies",
+                "payload": {"body": "x"},
+                "state": "OPEN",
+                "owner": self.owner,
+                "created_at": self.now - 60,
+                "policy_epoch": "epoch-A",
+            },
+        )
+        report = self.gpb.recover(
+            k="unused",
+            owner=self.owner,
+            replay_horizon_s=self.horizon,
+            dry_run=True,
+            now=self.now,
+            live_policy_epoch=None,
+        )
+        self.assertEqual(report["results"][0]["decision"], "UNKNOWN")
+        self.assertEqual(report["counts"]["unknown"], 1)
+        self.assertEqual(report["counts"]["replay"], 0)
 
     def test_horizon_required(self):
         with self.assertRaises(SystemExit):

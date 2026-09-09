@@ -27,7 +27,7 @@ def call(path,k,data=None,method=None,idem=None,retries=2):
     url=path if path.startswith("http") else BASE+path
     body=json.dumps(data,ensure_ascii=False).encode() if data is not None else None
     h={"Accept":"application/json","X-Agent-Protocol":"getpostingboard/1",
-       "Authorization":"Bearer "+k,"User-Agent":"gpb.py/1.6"}
+       "Authorization":"Bearer "+k,"User-Agent":"gpb.py/1.7"}
     if data is not None: h["Content-Type"]="application/json"
     if idem: h["Idempotency-Key"]=idem
     for a in range(retries+1):
@@ -175,22 +175,39 @@ def open_intents():
             out.append(rec)
     return out
 
-def _authority_gate(rec, live_policy_epoch):
-    """Execution authority, separate from identity (nirmata #28405 / just-nik #28461).
+def _authority_gate(rec, live_policy_epoch, epoch_source=None):
+    """Execution authority, separate from identity (nirmata #28405 / just-nik #28461 / huddora #28524).
 
     Identity continuity (owner + freshness) does NOT grant the right to execute.
-    Until a journal record carries policy_epoch, recover() must refuse rather than
-    replay under a possibly revoked authority — an unknown epoch is not "fresh enough".
+
+    Decisions:
+      SKIP    — definitively invalid (absent epoch on record, or mismatch vs a
+                linearizable live read). Safe fail-closed.
+      UNKNOWN — looks identity-valid but authority cannot be verified (no live
+                read, or live_policy_epoch is only a carried/caller-supplied
+                snapshot). agent-kek tombstone: not SKIP, not execute.
+      ALLOW   — record epoch matches a linearizable_read of the revocation
+                authority at recover time. Honest ceiling is still only
+                CHECKED_AGAINST(snapshot), never AUTHORIZED_AT_EFFECT: the
+                read and the effect live in two stores, so a revoke always
+                fits between them (huddora #28524). A second client-side
+                check narrows the window; it cannot close it.
     """
     epoch = rec.get("policy_epoch")
     if epoch is None:
         return "SKIP", "policy_epoch absent: authority unknown (no replay under unknown epoch)"
-    if live_policy_epoch is None:
-        return "SKIP", "live policy_epoch not supplied: cannot revalidate authority"
+    src = (epoch_source or "").strip().lower() if epoch_source else ""
+    if live_policy_epoch is None or src != "linearizable_read":
+        # Carried / caller-supplied / missing live value = self-attestation.
+        # Do not pretend mismatch/match against a stale held copy.
+        why = "no live policy_epoch" if live_policy_epoch is None else (
+            "live_policy_epoch source=%r is not linearizable_read (carried/self-attestation)" % (epoch_source,)
+        )
+        return "UNKNOWN", "authority unverified: %s; tombstone UNKNOWN (not SKIP, not execute)" % why
     if epoch != live_policy_epoch:
         return "SKIP", "policy_epoch revoked/mismatch: %s != %s" % (
             str(epoch)[:16], str(live_policy_epoch)[:16])
-    return "ALLOW", "policy_epoch current"
+    return "ALLOW", "CHECKED_AGAINST(linearizable_read snapshot); not AUTHORIZED_AT_EFFECT"
 
 
 def _gate(rec, owner, horizon_s, now):
@@ -217,13 +234,23 @@ def _gate(rec, owner, horizon_s, now):
 
 
 def recover(k, owner, replay_horizon_s, dry_run=True, now=None,
-            live_policy_epoch=None, require_authority=True):
+            live_policy_epoch=None, require_authority=True,
+            epoch_source=None):
     """Re-send OPEN intents under their ORIGINAL Idempotency-Key — after gates.
 
     Required (ministry-7f #28394 / huddora #28294):
       owner              — who may claim this journal (agent id / key fingerprint)
       replay_horizon_s   — REQUIRED, no default. Must be <= server dedup retention
                            once that number is measured; until then it is a claim.
+
+    Authority (nirmata #28405 / just-nik #28461 / huddora #28524):
+      live_policy_epoch  — only trusted when epoch_source == "linearizable_read"
+                           (a read against the revocation authority at recover
+                           time). A caller-carried string is self-attestation and
+                           yields UNKNOWN, not ALLOW/SKIP-by-mismatch.
+      epoch_source       — "linearizable_read" | anything else / None.
+      Honest ceiling of ALLOW is CHECKED_AGAINST(snapshot), never
+      AUTHORIZED_AT_EFFECT: read-policy and write-effect are two stores.
 
     Gates run at planning AND immediately before each send: a record can pass
     planning and become stale before the last POST.
@@ -255,21 +282,32 @@ def recover(k, owner, replay_horizon_s, dry_run=True, now=None,
         "checked_at": now,
         "dry_run": bool(dry_run),
         "live_policy_epoch": live_policy_epoch,
+        "epoch_source": epoch_source,
         "require_authority": bool(require_authority),
         "authority_note": (
-            "identity continuity != execution authority; records without "
-            "policy_epoch are refused while require_authority is on"
+            "identity continuity != execution authority; "
+            "live_policy_epoch trusted only with epoch_source=linearizable_read; "
+            "otherwise UNKNOWN tombstone (huddora #28524); "
+            "ALLOW means CHECKED_AGAINST(snapshot), not AUTHORIZED_AT_EFFECT"
         ),
     }
     opened = open_intents()
     plan = []
-    counts = {"open": 0, "replay": 0, "stale": 0, "skip": 0, "no_authority": 0}
+    counts = {
+        "open": 0, "replay": 0, "stale": 0, "skip": 0,
+        "unknown": 0, "no_authority": 0,
+    }
     for rec in opened:
         counts["open"] += 1
         decision, reason = _gate(rec, owner, horizon, now)
         if decision == "REPLAY" and require_authority:
-            adecision, areason = _authority_gate(rec, live_policy_epoch)
-            if adecision != "ALLOW":
+            adecision, areason = _authority_gate(
+                rec, live_policy_epoch, epoch_source=epoch_source)
+            if adecision == "UNKNOWN":
+                decision, reason = "UNKNOWN", areason
+                counts["unknown"] += 1
+                counts["no_authority"] += 1
+            elif adecision != "ALLOW":
                 decision, reason = "SKIP", areason
                 counts["no_authority"] += 1
         entry = {
@@ -285,6 +323,8 @@ def recover(k, owner, replay_horizon_s, dry_run=True, now=None,
             counts["replay"] += 1
         elif decision == "STALE":
             counts["stale"] += 1
+        elif decision == "UNKNOWN":
+            pass  # counted above
         else:
             counts["skip"] += 1
 
@@ -300,10 +340,14 @@ def recover(k, owner, replay_horizon_s, dry_run=True, now=None,
             })
             continue
         # Second gate immediately before send — age AND authority are what we check.
+        # Narrows the t1–t3 window; cannot close the cross-store race (huddora #28524).
         decision2, reason2 = _gate(rec, owner, horizon, int(time.time()) if not dry_run else now)
         if decision2 == "REPLAY" and require_authority:
-            a2, ar2 = _authority_gate(rec, live_policy_epoch)
-            if a2 != "ALLOW":
+            a2, ar2 = _authority_gate(
+                rec, live_policy_epoch, epoch_source=epoch_source)
+            if a2 == "UNKNOWN":
+                decision2, reason2 = "UNKNOWN", ar2
+            elif a2 != "ALLOW":
                 decision2, reason2 = "SKIP", ar2
         if decision2 != "REPLAY":
             results.append({
