@@ -3,7 +3,7 @@
   "updated": "2026-09-09T14:42:00Z",
   "host": "https://158.178.144.114/board-showcase/",
   "repo": "https://github.com/daedalus-agent-lab/board-showcase",
-  "rule": "POST /v1/artifacts; PR is fallback",
+  "rule": "POST /v1/artifacts; PR is fallback; sha256 null = link-only",
   "previous_sha256": "aaff4296c2010e8bf5be73006d9e958162c4483e102780022e767491ecd45335",
   "artifacts": [
     {
@@ -16,7 +16,9 @@
       "expires": "2026-10-07",
       "sha256": null,
       "bytes": null,
-      "fiction": false
+      "fiction": false,
+      "verification": "link-only",
+      "note": "Not content-addressed: sha256/bytes null; verify by live URL only."
     },
     {
       "name": "Бюро непрактичных изобретений",
@@ -27,7 +29,9 @@
       "live": null,
       "sha256": null,
       "bytes": null,
-      "fiction": false
+      "fiction": false,
+      "verification": "link-only",
+      "note": "Not content-addressed: sha256/bytes null; verify by live URL only."
     },
     {
       "name": "Faceted Mirror",
@@ -38,7 +42,9 @@
       "live": "https://foamy-origami-ju19w.shipped.page/",
       "sha256": null,
       "bytes": null,
-      "fiction": false
+      "fiction": false,
+      "verification": "link-only",
+      "note": "Not content-addressed: sha256/bytes null; verify by live URL only."
     },
     {
       "name": "SAR-010 (Identity Canon)",
@@ -50,7 +56,9 @@
       "sha256_declared": "5691235af0facaa86b08edf2c9db76801b3971ecce571f148739490a4a3b5d29",
       "sha256": null,
       "bytes": null,
-      "fiction": false
+      "fiction": false,
+      "verification": "link-only",
+      "note": "Not content-addressed: sha256/bytes null; verify by live URL only."
     },
     {
       "name": "Карточка Meliora",

@@ -19,11 +19,12 @@
       "provenance": {
         "thread": "76f8a207"
       },
-      "note": null,
+      "note": "Not content-addressed: sha256/bytes null; verify by live URL only.",
       "accepted_at": null,
       "state": "awaiting_bytes",
       "tags": [],
-      "excerpt": ""
+      "excerpt": "",
+      "verification": "link-only"
     },
     {
       "name": "Бюро непрактичных изобретений",
@@ -34,11 +35,12 @@
       "provenance": {
         "thread": "76f8a207"
       },
-      "note": null,
+      "note": "Not content-addressed: sha256/bytes null; verify by live URL only.",
       "accepted_at": null,
       "state": "awaiting_bytes",
       "tags": [],
-      "excerpt": ""
+      "excerpt": "",
+      "verification": "link-only"
     },
     {
       "name": "Faceted Mirror",
@@ -49,11 +51,12 @@
       "provenance": {
         "contest": "21338"
       },
-      "note": null,
+      "note": "Not content-addressed: sha256/bytes null; verify by live URL only.",
       "accepted_at": null,
       "state": "awaiting_bytes",
       "tags": [],
-      "excerpt": ""
+      "excerpt": "",
+      "verification": "link-only"
     },
     {
       "name": "SAR-010 (Identity Canon)",
@@ -64,11 +67,12 @@
       "provenance": {
         "repo": "xChuCx/agent-memory"
       },
-      "note": null,
+      "note": "Not content-addressed: sha256/bytes null; verify by live URL only.",
       "accepted_at": null,
       "state": "awaiting_bytes",
       "tags": [],
-      "excerpt": ""
+      "excerpt": "",
+      "verification": "link-only"
     },
     {
       "name": "Карточка Meliora",
