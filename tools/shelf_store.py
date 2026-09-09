@@ -26,6 +26,19 @@ LOCK = threading.Lock()
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
+def _content_type(filename: str) -> str:
+    name = (filename or "").lower()
+    if name.endswith(".json"):
+        return "application/json; charset=utf-8"
+    if name.endswith(".svg"):
+        return "image/svg+xml"
+    if name.endswith(".html") or name.endswith(".htm"):
+        return "text/html; charset=utf-8"
+    if name.endswith(".md") or name.endswith(".txt"):
+        return "text/plain; charset=utf-8"
+    return "application/octet-stream"
+
+
 def _atomic_write(path: Path, data: bytes, mode: int = 0o644) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp-")
@@ -236,7 +249,7 @@ class ShelfStore:
             return 400, {"error": "BAD_SHA256"}
         tomb = self.tombstone_of(sha256)
         if tomb:
-            return 410, {"state": "evicted", "tombstone": tomb}
+            return 410, {"state": "evicted", "tombstone": tomb, "blobs": f"/v1/blobs/{sha256}"}
         blob = self.get_blob(sha256)
         if blob is not None and self.is_live(sha256):
             man = self.load_manifest()
@@ -246,15 +259,52 @@ class ShelfStore:
                 "sha256": sha256,
                 "bytes": len(blob),
                 "artifact": row,
+                "blobs": f"https://158.178.144.114/v1/blobs/{sha256}",
+                "note": "JSON metadata only; raw bytes are GET /v1/blobs/{sha256}",
             }
         if blob is not None:
             return 200, {
                 "state": "orphan_blob",
                 "sha256": sha256,
                 "bytes": len(blob),
+                "blobs": f"https://158.178.144.114/v1/blobs/{sha256}",
                 "note": "bytes staged, not in live manifest (GC candidate)",
             }
         return 404, {"state": "never", "sha256": sha256}
+
+    def open_blob(self, sha256: str) -> tuple[int, dict[str, Any], Path | None]:
+        """Return (http_code, meta_or_error, path_to_bytes_or_None).
+
+        meta includes filename/content_type/bytes for a live or orphan blob.
+        Bodies are never returned here — callers stream from the path.
+        """
+        if not SHA_RE.match(sha256 or ""):
+            return 400, {"error": "BAD_SHA256"}, None
+        tomb = self.tombstone_of(sha256)
+        if tomb:
+            return 410, {"state": "evicted", "tombstone": tomb}, None
+        path = self.blobs / sha256
+        if not path.is_file():
+            return 404, {"state": "never", "sha256": sha256}, None
+        size = path.stat().st_size
+        filename = None
+        if self.is_live(sha256):
+            man = self.load_manifest()
+            row = next((a for a in man.get("artifacts") or [] if a.get("sha256") == sha256), None)
+            if row:
+                filename = row.get("filename")
+        ctype = _content_type(filename or "")
+        return (
+            200,
+            {
+                "state": "live" if self.is_live(sha256) else "orphan_blob",
+                "sha256": sha256,
+                "bytes": size,
+                "filename": filename,
+                "content_type": ctype,
+            },
+            path,
+        )
 
     def search(self, q: str = "", author: str = "", tag: str = "") -> dict[str, Any]:
         idx = _read_json(self.search_path) if self.search_path.is_file() else {"artifacts": []}
@@ -287,32 +337,38 @@ class ShelfStore:
 
     def rebuild_search(self) -> None:
         man = self.load_manifest()
+        # Search is metadata-only for agent context. Bodies live at /v1/blobs/{sha256}.
+        # Tiny UTF-8 excerpt (<=256 chars) only for objects <= 64 KiB.
+        EXCERPT_MAX_OBJECT = 64 * 1024
+        EXCERPT_CHARS = 256
         arts = []
         for a in man.get("artifacts") or []:
             digest = a.get("sha256")
+            size = a.get("bytes")
             excerpt = ""
-            if digest:
+            if digest and isinstance(size, int) and 0 < size <= EXCERPT_MAX_OBJECT:
                 blob = self.get_blob(digest)
-                if blob:
+                if blob and len(blob) <= EXCERPT_MAX_OBJECT:
                     try:
-                        excerpt = blob.decode("utf-8")[:500]
+                        excerpt = blob.decode("utf-8")[:EXCERPT_CHARS]
                     except UnicodeDecodeError:
                         excerpt = ""
-            arts.append(
-                {
-                    "name": a.get("name"),
-                    "sha256": digest,
-                    "bytes": a.get("bytes"),
-                    "author": a.get("author"),
-                    "filename": a.get("filename") or _filename_from_live(a.get("live")),
-                    "provenance": a.get("provenance"),
-                    "note": a.get("note"),
-                    "accepted_at": a.get("accepted_at"),
-                    "state": "live" if digest and a.get("bytes") is not None else "awaiting_bytes",
-                    "tags": a.get("tags") or [],
-                    "excerpt": excerpt,
-                }
-            )
+            entry = {
+                "name": a.get("name"),
+                "sha256": digest,
+                "bytes": size,
+                "author": a.get("author"),
+                "filename": a.get("filename") or _filename_from_live(a.get("live")),
+                "provenance": a.get("provenance"),
+                "note": a.get("note"),
+                "accepted_at": a.get("accepted_at"),
+                "state": "live" if digest and size is not None else "awaiting_bytes",
+                "tags": a.get("tags") or [],
+                "blobs": f"https://158.178.144.114/v1/blobs/{digest}" if digest else None,
+            }
+            if excerpt:
+                entry["excerpt"] = excerpt
+            arts.append(entry)
         tombs = []
         for p in sorted(self.tombstones.glob("*.json")):
             tombs.append(_read_json(p))
@@ -327,7 +383,8 @@ class ShelfStore:
             "mirror_url": "https://158.178.144.114/board-showcase/",
             "manifest_url": "./manifest.json",
             "lookup": {
-                "by_sha256": "GET /v1/by-sha256/{sha256} → live | 410 tombstone | 404 never"
+                "by_sha256": "GET /v1/by-sha256/{sha256} → JSON metadata live|410|404",
+                "blobs": "GET /v1/blobs/{sha256} → raw bytes (Range supported); never JSON-wrapped",
             },
             "tombstones": tombs,
             "artifacts": arts,

@@ -140,6 +140,40 @@ class StoreTests(unittest.TestCase):
         man_h = hashlib.sha256((Path(self.tmp.name) / "data" / "manifest.json").read_bytes()).hexdigest()
         self.assertEqual(found.get("source_manifest_sha256"), man_h)
         self.assertEqual(found.get("coverage"), "complete")
+        hit = found["artifacts"][0]
+        self.assertIn("blobs", hit)
+        self.assertTrue(hit["blobs"].endswith(check.sha256))
+        # search may carry a tiny excerpt for small objects, never more than 256 chars
+        if "excerpt" in hit:
+            self.assertLessEqual(len(hit["excerpt"]), 256)
+        # objects larger than 64 KiB must not get an excerpt at all
+        big = b"x" * (64 * 1024 + 1)
+        big_check = check_package(
+            **_pkg(
+                content=big,
+                filename="big.txt",
+                name="Big",
+                idempotency_key="test-idempotency-key-big",
+            )
+        )
+        # size lane still rejects >2MiB; 64KiB+1 is allowed and must omit excerpt
+        self.assertTrue(big_check.ok, big_check.reason_line())
+        self.store.accept(
+            content=big,
+            check=big_check,
+            principal="tester-agent",
+            idempotency_key="test-idempotency-key-big",
+        )
+        big_hit = next(a for a in self.store.search(q="Big")["artifacts"] if a.get("sha256") == big_check.sha256)
+        self.assertNotIn("excerpt", big_hit)
+        self.assertTrue(big_hit["blobs"].endswith(big_check.sha256))
+
+        code_b, meta_b, path_b = self.store.open_blob(check.sha256)
+        self.assertEqual(code_b, 200)
+        self.assertEqual(meta_b["bytes"], len(content))
+        self.assertIsNotNone(path_b)
+        self.assertEqual(path_b.read_bytes(), content)
+        self.assertEqual(body.get("blobs"), f"https://158.178.144.114/v1/blobs/{check.sha256}")
 
         op = self.store.get_operation(op_id)
         self.assertEqual(op["state"], "ACCEPTED")

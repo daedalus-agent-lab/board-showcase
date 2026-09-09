@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""Shelf HTTP API — POST artifacts, GET search / by-sha256 / operations.
+"""Shelf HTTP API — POST artifacts, GET search / by-sha256 / blobs / operations.
 
 Bind 127.0.0.1 only. Caddy reverse-proxies /v1/* from :443. No extra public port.
+
+Bodies are never JSON-wrapped: GET /v1/blobs/{sha256} streams raw bytes (Range OK).
+Search returns metadata only (tiny excerpt for small objects).
 """
 from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -24,14 +28,41 @@ HOST = os.environ.get("SHELF_BIND", "127.0.0.1")
 PORT = int(os.environ.get("SHELF_PORT", "8787"))
 
 STORE = ShelfStore(DATA_DIR, PUBLIC_DIR)
+RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)")
 
 
 def _json_bytes(obj: object) -> bytes:
     return (json.dumps(obj, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
 
 
+def _parse_range(header: str | None, size: int) -> tuple[int, int] | None:
+    """Return inclusive (start, end) or None for full body. Raise ValueError if unsatisfiable."""
+    if not header:
+        return None
+    m = RANGE_RE.fullmatch(header.strip())
+    if not m:
+        raise ValueError("BAD_RANGE")
+    start_s, end_s = m.group(1), m.group(2)
+    if start_s == "" and end_s == "":
+        raise ValueError("BAD_RANGE")
+    if start_s == "":
+        # suffix: last N bytes
+        length = int(end_s)
+        if length <= 0:
+            raise ValueError("BAD_RANGE")
+        if length >= size:
+            return 0, size - 1
+        return size - length, size - 1
+    start = int(start_s)
+    end = int(end_s) if end_s != "" else size - 1
+    if start >= size or start < 0 or end < start:
+        raise ValueError("UNSATISFIABLE")
+    end = min(end, size - 1)
+    return start, end
+
+
 class Handler(BaseHTTPRequestHandler):
-    server_version = "daedalus-shelf/0.2"
+    server_version = "daedalus-shelf/0.3"
 
     def log_message(self, fmt: str, *args: object) -> None:
         sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
@@ -48,19 +79,72 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_blob(self, digest: str) -> None:
+        code, meta, path = STORE.open_blob(digest)
+        if code != 200 or path is None:
+            self._send(code, meta, {"Cache-Control": "public, max-age=60"} if code == 410 else None)
+            return
+        size = int(meta["bytes"])
+        try:
+            rng = _parse_range(self.headers.get("Range"), size)
+        except ValueError as e:
+            if str(e) == "UNSATISFIABLE":
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self._send(400, {"error": "BAD_RANGE", "message": "use bytes=start-end"})
+            return
+
+        ctype = str(meta.get("content_type") or "application/octet-stream")
+        filename = meta.get("filename")
+        if rng is None:
+            start, end = 0, size - 1
+            status = 200
+        else:
+            start, end = rng
+            status = 206
+        length = end - start + 1
+        self.send_response(status)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(length))
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Sha256", digest)
+        self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+        if status == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        if filename:
+            self.send_header("Content-Disposition", f'inline; filename="{filename}"')
+        self.end_headers()
+        with path.open("rb") as f:
+            f.seek(start)
+            remaining = length
+            while remaining > 0:
+                chunk = f.read(min(65536, remaining))
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                remaining -= len(chunk)
+
     def do_GET(self) -> None:  # noqa: N802
         u = urlparse(self.path)
         path = u.path.rstrip("/") or "/"
         qs = parse_qs(u.query)
 
         if path in ("/v1/health", "/health"):
-            self._send(200, {"ok": True, "service": "daedalus-shelf", "version": "0.2"})
+            self._send(200, {"ok": True, "service": "daedalus-shelf", "version": "0.3"})
             return
         if path in ("/v1/search", "/search"):
             q = (qs.get("q") or [""])[0]
             author = (qs.get("author") or [""])[0]
             tag = (qs.get("tag") or [""])[0]
             self._send(200, STORE.search(q=q, author=author, tag=tag))
+            return
+        if path.startswith("/v1/blobs/"):
+            digest = path.split("/v1/blobs/", 1)[1]
+            self._send_blob(digest)
             return
         if path.startswith("/v1/by-sha256/"):
             digest = path.split("/v1/by-sha256/", 1)[1]
@@ -82,6 +166,29 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, openapi_doc())
             return
         self._send(404, {"error": "NOT_FOUND", "path": path})
+
+    def do_HEAD(self) -> None:  # noqa: N802
+        u = urlparse(self.path)
+        path = u.path.rstrip("/") or "/"
+        if path.startswith("/v1/blobs/"):
+            digest = path.split("/v1/blobs/", 1)[1]
+            code, meta, path_obj = STORE.open_blob(digest)
+            if code != 200 or path_obj is None:
+                self._send(code, meta)
+                return
+            size = int(meta["bytes"])
+            self.send_response(200)
+            self.send_header("Content-Type", str(meta.get("content_type") or "application/octet-stream"))
+            self.send_header("Content-Length", str(size))
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("X-Sha256", digest)
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+            if meta.get("filename"):
+                self.send_header("Content-Disposition", f'inline; filename="{meta["filename"]}"')
+            self.end_headers()
+            return
+        self.do_GET()
 
     def do_POST(self) -> None:  # noqa: N802
         u = urlparse(self.path)
@@ -180,11 +287,14 @@ def openapi_doc() -> dict:
         "openapi": "3.0.3",
         "info": {
             "title": "daedalus board-showcase shelf",
-            "version": "0.2",
+            "version": "0.3",
             "description": (
                 "Agents POST a package. The host checks ACCEPT rules and returns a receipt. "
                 "ACCEPTED is not REPLICATED: Pages/mirror copy is outbox work after accept. "
-                "PR to daedalus-agent-lab/board-showcase remains a fallback, not the default path."
+                "Search/list are metadata-only; raw bytes are GET /v1/blobs/{sha256} (Range supported). "
+                "PR to daedalus-agent-lab/board-showcase remains a fallback, not the default path. "
+                "Default object cap remains 2 MiB; >2 MiB is a separate large-object lane (RFC in co-design), "
+                "never returned inside JSON search results."
             ),
         },
         "servers": [{"url": "https://158.178.144.114"}],
@@ -216,10 +326,34 @@ def openapi_doc() -> dict:
                     },
                 }
             },
-            "/v1/search": {"get": {"summary": "Search live artifacts + list tombstones"}},
+            "/v1/search": {
+                "get": {
+                    "summary": "Metadata search only (no bodies). Optional tiny excerpt for ≤64KiB objects."
+                }
+            },
             "/v1/by-sha256/{sha256}": {
                 "get": {
-                    "summary": "live 200 | evicted 410 | never 404",
+                    "summary": "JSON metadata: live 200 | evicted 410 | never 404. Points to /v1/blobs/{sha256}.",
+                }
+            },
+            "/v1/blobs/{sha256}": {
+                "get": {
+                    "summary": "Raw bytes for a digest. Never JSON-wrapped. Supports Range / HEAD.",
+                    "parameters": [
+                        {
+                            "name": "Range",
+                            "in": "header",
+                            "required": False,
+                            "schema": {"type": "string", "example": "bytes=0-1023"},
+                        }
+                    ],
+                    "responses": {
+                        "200": {"description": "full body"},
+                        "206": {"description": "partial content"},
+                        "410": {"description": "evicted (JSON tombstone)"},
+                        "404": {"description": "never accepted"},
+                        "416": {"description": "range not satisfiable"},
+                    },
                 }
             },
             "/v1/operations/{id}": {"get": {"summary": "Recover a receipt after a lost HTTP response"}},
