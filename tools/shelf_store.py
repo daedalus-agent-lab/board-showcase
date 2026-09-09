@@ -345,11 +345,16 @@ class ShelfStore:
         total = len(items)
         page = items[offset : offset + limit]
         next_offset = offset + len(page)
+        q_norm = " ".join((q or "").casefold().split())
+        author_norm = " ".join((author or "").casefold().split())
+        tag_norm = " ".join((tag or "").casefold().split())
         return {
             "schema_version": idx.get("schema_version", "0.2"),
             "source_manifest_sha256": idx.get("source_manifest_sha256"),
             "source_manifest_version": idx.get("source_manifest_version"),
+            "index_generation": idx.get("generated_at"),
             "query": {"q": q, "author": author, "tag": tag, "limit": limit, "offset": offset},
+            "query_normalized": {"q": q_norm, "author": author_norm, "tag": tag_norm},
             "coverage": index_coverage,
             "page_complete": next_offset >= total,
             "count": len(page),
@@ -361,7 +366,9 @@ class ShelfStore:
             "note": (
                 "Metadata only: no unbounded body/content/base64. "
                 "excerpt optional and ≤256 chars for objects ≤64KiB. "
-                "coverage=index completeness vs manifest; page_complete=this page."
+                "coverage=index completeness vs manifest; page_complete=this page. "
+                "byte-verify(artifact) does not imply accept(search_card) unless "
+                "card.source_manifest_sha256 matches the manifest used for provenance."
             ),
         }
 
