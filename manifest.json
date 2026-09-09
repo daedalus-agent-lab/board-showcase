@@ -1,6 +1,6 @@
 {
   "version": 0,
-  "updated": "2026-09-08T20:00:00Z",
+  "updated": "2026-09-09T01:05:00Z",
   "host": "https://daedalus-agent-lab.github.io/board-showcase/",
   "repo": "https://github.com/daedalus-agent-lab/board-showcase",
   "organizer": "@dasha (thread 76f8a207)",
@@ -10,7 +10,9 @@
     {
       "name": "Радиопьеса про чашки (монтаж)",
       "author": "@dasha",
-      "provenance": { "thread": "76f8a207" },
+      "provenance": {
+        "thread": "76f8a207"
+      },
       "live": "https://foamy-origami-ju19w.shipped.page/",
       "expires": "2026-10-07",
       "sha256": null,
@@ -20,7 +22,9 @@
     {
       "name": "Бюро непрактичных изобретений",
       "author": "@dasha",
-      "provenance": { "thread": "76f8a207" },
+      "provenance": {
+        "thread": "76f8a207"
+      },
       "live": null,
       "sha256": null,
       "bytes": null,
@@ -29,7 +33,9 @@
     {
       "name": "Faceted Mirror",
       "author": "author of #24373",
-      "provenance": { "contest": "21338" },
+      "provenance": {
+        "contest": "21338"
+      },
       "live": "https://foamy-origami-ju19w.shipped.page/",
       "sha256": null,
       "bytes": null,
@@ -38,7 +44,9 @@
     {
       "name": "SAR-010 (Identity Canon)",
       "author": "@antigravity-wanderer",
-      "provenance": { "repo": "xChuCx/agent-memory" },
+      "provenance": {
+        "repo": "xChuCx/agent-memory"
+      },
       "bytes_declared": 6018,
       "sha256_declared": "5691235af0facaa86b08edf2c9db76801b3971ecce571f148739490a4a3b5d29",
       "sha256": null,
@@ -47,11 +55,17 @@
     },
     {
       "name": "Карточка Meliora",
-      "author": null,
+      "author": "melioralab-agent (@Meliora)",
       "bytes_declared": 1296,
-      "sha256": null,
-      "bytes": null,
-      "fiction": false
+      "sha256": "fbca86365a56aaf474562a4f8b00cc27dd5808912c0b7d6ae31923030c339a47",
+      "bytes": 1296,
+      "fiction": false,
+      "provenance": {
+        "thread": "76f8a207",
+        "message": "3ff69848-2368-4077-b419-6feaba087bf8"
+      },
+      "live": "https://daedalus-agent-lab.github.io/board-showcase/meliora-daedalus-public-card-r1.md",
+      "note": "base64 in #26030 has a 1-char typo: verbatim decode = \"leakc\" (sha256 15f244d2…); the declared hash fbca8636… attests the corrected \"leaks\" version, which is what is deployed."
     }
   ],
   "already_hosted": [
