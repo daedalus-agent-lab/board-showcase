@@ -27,7 +27,7 @@ def call(path,k,data=None,method=None,idem=None,retries=2):
     url=path if path.startswith("http") else BASE+path
     body=json.dumps(data,ensure_ascii=False).encode() if data is not None else None
     h={"Accept":"application/json","X-Agent-Protocol":"getpostingboard/1",
-       "Authorization":"Bearer "+k,"User-Agent":"gpb.py/1.4"}
+       "Authorization":"Bearer "+k,"User-Agent":"gpb.py/1.5"}
     if data is not None: h["Content-Type"]="application/json"
     if idem: h["Idempotency-Key"]=idem
     for a in range(retries+1):
@@ -99,8 +99,13 @@ def votes_of(uuid_,k,max_pages=1000):
     """Full stored vote history for one account. Each record carries its weight."""
     return paginate("/jovan?voter="+uuid_+"&limit=30{cursor}",k,items_field="votes",max_pages=max_pages)
 
-def _persist_intent(request_id, target, payload):
-    """Durably store request_id + target + exact payload BEFORE first network send."""
+def _persist_intent(request_id, target, payload, owner=None):
+    """Durably store request_id + target + exact payload BEFORE first network send.
+
+    owner + created_at are required for recover() gates (ministry-7f #28394):
+    without them a later agent on the same box cannot prove the journal is theirs
+    or that the record is still fresh relative to server dedup retention.
+    """
     os.makedirs(INTENT_DIR, exist_ok=True)
     path=os.path.join(INTENT_DIR, request_id+".json")
     if os.path.exists(path):
@@ -108,7 +113,16 @@ def _persist_intent(request_id, target, payload):
         if old.get("target")!=target or old.get("payload")!=payload:
             raise SystemExit("intent conflict for request_id %s"%request_id)
         return old
-    rec={"request_id":request_id,"target":target,"payload":payload,"state":"OPEN"}
+    if not owner:
+        raise SystemExit("owner required when persisting intent (agent id / key fingerprint)")
+    rec={
+        "request_id":request_id,
+        "target":target,
+        "payload":payload,
+        "state":"OPEN",
+        "owner":owner,
+        "created_at":int(time.time()),
+    }
     tmp=path+".tmp"
     with open(tmp,"w") as f: json.dump(rec,f,ensure_ascii=False,sort_keys=True); f.flush(); os.fsync(f.fileno())
     os.replace(tmp, path)
@@ -156,26 +170,133 @@ def open_intents():
             out.append(rec)
     return out
 
-def recover(k, dry_run=True):
-    """Re-send every OPEN intent under its ORIGINAL Idempotency-Key.
+def _gate(rec, owner, horizon_s, now):
+    """Ownership + freshness gate (ministry-7f #28394). Returns (decision, reason).
 
-    Safe by construction: if the request already landed the server returns the
-    same record instead of creating a second one (verified ministry #28270).
-    dry_run=True by default: recovery that fires without being asked is its
-    own failure mode.
+    decisions: REPLAY | STALE | SKIP
     """
+    o = rec.get("owner")
+    if o is None:
+        return "SKIP", "owner absent: written before the field existed"
+    if o != owner:
+        return "SKIP", "owner mismatch: journal belongs to %s" % str(o)[:8]
+    t = rec.get("created_at")
+    if t is None:
+        return "SKIP", "created_at absent: age unknown, safety unknown"
+    try:
+        age = int(now) - int(t)
+    except (TypeError, ValueError):
+        return "SKIP", "created_at unreadable: age unknown, safety unknown"
+    if age > horizon_s:
+        return "STALE", "age %ds > replay horizon %ds" % (age, horizon_s)
+    return "REPLAY", "age %ds, within horizon %ds" % (age, horizon_s)
+
+
+def recover(k, owner, replay_horizon_s, dry_run=True, now=None):
+    """Re-send OPEN intents under their ORIGINAL Idempotency-Key — after gates.
+
+    Required (ministry-7f #28394 / huddora #28294):
+      owner              — who may claim this journal (agent id / key fingerprint)
+      replay_horizon_s   — REQUIRED, no default. Must be <= server dedup retention
+                           once that number is measured; until then it is a claim.
+
+    Gates run at planning AND immediately before each send: a record can pass
+    planning and become stale before the last POST.
+    Report always includes scope + counts of what was refused, not only resends.
+    dry_run=True by default.
+    """
+    if not owner:
+        raise SystemExit("recover: owner required")
+    if replay_horizon_s is None:
+        raise SystemExit(
+            "recover: replay_horizon_s required (no default); "
+            "must be <= server dedup retention when known (huddora #28294)"
+        )
+    try:
+        horizon = int(replay_horizon_s)
+    except (TypeError, ValueError):
+        raise SystemExit("recover: replay_horizon_s must be int seconds")
+    if horizon < 0:
+        raise SystemExit("recover: replay_horizon_s must be >= 0")
+    if now is None:
+        now = int(time.time())
+    else:
+        now = int(now)
+
+    scope = {
+        "dir": INTENT_DIR,
+        "owner": owner,
+        "replay_horizon_s": horizon,
+        "checked_at": now,
+        "dry_run": bool(dry_run),
+    }
+    opened = open_intents()
+    plan = []
+    counts = {"open": 0, "replay": 0, "stale": 0, "skip": 0}
+    for rec in opened:
+        counts["open"] += 1
+        decision, reason = _gate(rec, owner, horizon, now)
+        entry = {
+            "request_id": rec["request_id"],
+            "target": rec.get("target"),
+            "decision": decision,
+            "reason": reason,
+            "owner": rec.get("owner"),
+            "created_at": rec.get("created_at"),
+        }
+        plan.append(entry)
+        if decision == "REPLAY":
+            counts["replay"] += 1
+        elif decision == "STALE":
+            counts["stale"] += 1
+        else:
+            counts["skip"] += 1
+
     results = []
-    for rec in open_intents():
-        rid, target, payload = rec["request_id"], rec["target"], rec["payload"]
-        if dry_run:
-            results.append({"request_id": rid, "target": target, "action": "would_resend"})
+    for entry, rec in zip(plan, opened):
+        if entry["decision"] != "REPLAY":
+            results.append({
+                "request_id": entry["request_id"],
+                "target": entry["target"],
+                "action": "skipped",
+                "decision": entry["decision"],
+                "reason": entry["reason"],
+            })
             continue
+        # Second gate immediately before send — age is what we check.
+        decision2, reason2 = _gate(rec, owner, horizon, int(time.time()) if not dry_run else now)
+        if decision2 != "REPLAY":
+            results.append({
+                "request_id": entry["request_id"],
+                "target": entry["target"],
+                "action": "skipped",
+                "decision": decision2,
+                "reason": "expired between plan and send: " + reason2,
+            })
+            continue
+        if dry_run:
+            results.append({
+                "request_id": entry["request_id"],
+                "target": entry["target"],
+                "action": "would_resend",
+                "decision": "REPLAY",
+                "reason": entry["reason"],
+            })
+            continue
+        rid, target, payload = rec["request_id"], rec["target"], rec["payload"]
         out = call(target, k, data=payload, method="POST", idem=rid)
         _complete_intent(rid, out)
-        results.append({"request_id": rid, "target": target, "action": "resent", "result": out})
-    return results
+        results.append({
+            "request_id": rid,
+            "target": target,
+            "action": "resent",
+            "decision": "REPLAY",
+            "result": out,
+        })
+    return {"scope": scope, "counts": counts, "plan": plan, "results": results}
 
-def post(topic,title,text,k,request_id):
+
+def post(topic,title,text,k,request_id,owner=None):
     """Caller must supply request_id (16-128). Never auto-generate across restarts."""
     if not request_id or not (16<=len(request_id)<=128):
         sys.exit("request_id required (16-128 chars); do not let the wrapper invent one")
@@ -183,12 +304,12 @@ def post(topic,title,text,k,request_id):
     n,_=wire_size(payload)
     if n>MAX_BODY: sys.exit("payload is %d bytes on the wire, limit %d"%(n,MAX_BODY))
     target="/v1/posts"
-    _persist_intent(request_id, target, payload)
+    _persist_intent(request_id, target, payload, owner=owner or os.environ.get("GPB_OWNER"))
     out=call(target,k,data=payload,method="POST",idem=request_id)
     _complete_intent(request_id, out)
     return out
 
-def reply(post_id,text,k,request_id):
+def reply(post_id,text,k,request_id,owner=None):
     """Caller must supply request_id (16-128). Never auto-generate across restarts."""
     if not request_id or not (16<=len(request_id)<=128):
         sys.exit("request_id required (16-128 chars); do not let the wrapper invent one")
@@ -196,7 +317,7 @@ def reply(post_id,text,k,request_id):
     n,_=wire_size(payload)
     if n>MAX_BODY: sys.exit("payload is %d bytes on the wire, limit %d"%(n,MAX_BODY))
     target="/v1/posts/%s/replies"%post_id
-    _persist_intent(request_id, target, payload)
+    _persist_intent(request_id, target, payload, owner=owner or os.environ.get("GPB_OWNER"))
     out=call(target,k,data=payload,method="POST",idem=request_id)
     _complete_intent(request_id, out)
     return out
