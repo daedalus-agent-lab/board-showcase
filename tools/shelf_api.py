@@ -371,7 +371,78 @@ class Handler(BaseHTTPRequestHandler):
             principal=str(principal),
             idempotency_key=str(key),
         )
-        self._send(int(result["http"]), result.get("receipt") or result)
+        receipt = result.get("receipt") or result
+        # Optional independent verifier (ACCEPT.md / v2bot). Never blocks intake.
+        if int(result.get("http") or 0) in (200, 201) and isinstance(receipt, dict):
+            verifier_spec = pkg.get("verifier")
+            try:
+                from verifier_hook import maybe_attest_from_env, request_attestation
+
+                att = None
+                if isinstance(verifier_spec, dict) and verifier_spec.get("endpoint"):
+                    att = request_attestation(
+                        base_url=str(verifier_spec["endpoint"]),
+                        submitter=str(principal),
+                        sha256=str(receipt.get("sha256") or check.sha256),
+                        pinned_ref=str(
+                            verifier_spec.get("pinned_ref")
+                            or (check.snapshot.get("provenance") or {}).get("thread")
+                            or "shelf-accept"
+                        ),
+                        bounds=str(
+                            verifier_spec.get("bounds")
+                            or f"{check.filename} {check.bytes_len}B"
+                        ),
+                        commitment_note=str(
+                            verifier_spec.get("commitment_note")
+                            or "optional shelf verifier after ACCEPTED"
+                        ),
+                        timeout_s=float(verifier_spec.get("timeout_s") or 3),
+                        poll_s=float(verifier_spec.get("poll_s") or 2),
+                    )
+                else:
+                    att = maybe_attest_from_env(
+                        submitter=str(principal),
+                        sha256=str(receipt.get("sha256") or check.sha256),
+                        pinned_ref=str(
+                            (check.snapshot.get("provenance") or {}).get("thread")
+                            or "shelf-accept"
+                        ),
+                        bounds=f"{check.filename} {check.bytes_len}B",
+                    )
+                if att is not None:
+                    receipt = dict(receipt)
+                    if att.get("status") in ("attested", "assigned"):
+                        receipt["verifier"] = {
+                            "attestation": {
+                                "attestation_id": att.get("attestation_id"),
+                                "assignment_id": att.get("assignment_id"),
+                                "seq": att.get("seq"),
+                                "evidence_digest": att.get("evidence_digest"),
+                                "verdict": att.get("verdict"),
+                                "status": att.get("status"),
+                            },
+                            "endpoint": att.get("endpoint"),
+                        }
+                    else:
+                        receipt["verifier"] = {
+                            "status": "unavailable",
+                            "reason": att.get("reason") or att.get("status"),
+                        }
+                    # Persist onto operation receipt best-effort (non-fatal).
+                    try:
+                        op_id = receipt.get("operation_id")
+                        if op_id:
+                            STORE.write_operation_patch(op_id, {"verifier": receipt["verifier"]})
+                    except Exception:
+                        pass
+            except Exception as e:
+                receipt = dict(receipt)
+                receipt["verifier"] = {
+                    "status": "unavailable",
+                    "reason": f"{type(e).__name__}: {e}",
+                }
+        self._send(int(result["http"]), receipt)
 
 
 def openapi_doc() -> dict:

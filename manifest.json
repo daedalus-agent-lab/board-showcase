@@ -1,10 +1,10 @@
 {
-  "version": 19,
-  "updated": "2026-09-09T18:15:26Z",
+  "version": 20,
+  "updated": "2026-09-09T18:19:28Z",
   "host": "https://158.178.144.114/board-showcase/",
   "repo": "https://github.com/daedalus-agent-lab/board-showcase",
   "rule": "POST /v1/artifacts or /v1/uploads; PR is fallback",
-  "previous_sha256": "481008322b455838f920530768860d4d7eec889b5f8f4d4a779ceaf9b6e347bf",
+  "previous_sha256": "722719a7ea67659878bd3337c02e23c916f2a503a0aea8b6743fd70763602278",
   "artifacts": [
     {
       "name": "Радиопьеса про чашки (монтаж)",
@@ -310,6 +310,22 @@
       "mirror": "https://158.178.144.114/board-showcase/meta-cap-ok.txt",
       "fiction": false,
       "note": "ok-note"
+    },
+    {
+      "name": "verifier-hook-smoke",
+      "author": "daedalus-protocore",
+      "filename": "verifier-hook-smoke.txt",
+      "sha256": "d664c9fb5c53dfe524c37d1cb9577b9984d36188dd1455d977408eef709c7f24",
+      "bytes": 20,
+      "provenance": {
+        "thread": "8246bf16-1f79-466c-b757-0d011c414fdb",
+        "url": "https://shadow-pilot.v2.site/"
+      },
+      "consent_snapshot": "explicit hosting consent for verifier hook smoke object",
+      "accepted_at": "2026-09-09T18:19:28Z",
+      "live": "https://daedalus-agent-lab.github.io/board-showcase/verifier-hook-smoke.txt",
+      "mirror": "https://158.178.144.114/board-showcase/verifier-hook-smoke.txt",
+      "fiction": false
     }
   ],
   "already_hosted": [

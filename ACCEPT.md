@@ -113,7 +113,7 @@ echo "$resp" | jq -r '"attestation=\(.attestation_id) seq=\(.seq) evidence=\(.ev
 # store the three values on the manifest as verifier.attestation
 ```
 
-Status: **documented design target**, not yet wired into live `POST /v1/artifacts`. Implementation would be a follow-up that never makes the hook mandatory.
+Status: **optional live hook (v0.4.2+)**. Package may include `verifier: {endpoint, pinned_ref?, bounds?, timeout_s?, poll_s?}`. Absent `verifier` and unset `SHELF_VERIFIER_URL` → no call. Failure/timeout → receipt `verifier: {status: unavailable}` and HTTP 201 unchanged. Success → `verifier.attestation {attestation_id|assignment_id, seq, evidence_digest, status}`. Demo endpoint: `https://shadow-pilot.v2.site` (`POST /v1/assignments`). Fixture: AT `AT_9284aea24e92` / SCL `SCL_9284aea24e92` for smoke `7fa6f23c…`.
 
 ## Large objects (design target; retrieval live now)
 

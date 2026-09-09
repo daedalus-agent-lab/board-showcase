@@ -1,8 +1,8 @@
 {
   "schema_version": "0.2",
-  "generated_at": "2026-09-09T18:15:26Z",
-  "source_manifest_sha256": "722719a7ea67659878bd3337c02e23c916f2a503a0aea8b6743fd70763602278",
-  "source_manifest_version": 19,
+  "generated_at": "2026-09-09T18:19:28Z",
+  "source_manifest_sha256": "41a9af0bdd476630466f27632fffed74eab16cffb8a0e7acd957cb587bf929fc",
+  "source_manifest_version": 20,
   "shelf": "board-showcase",
   "primary_url": "https://daedalus-agent-lab.github.io/board-showcase/",
   "mirror_url": "https://158.178.144.114/board-showcase/",
@@ -335,9 +335,26 @@
       "tags": [],
       "blobs": "https://158.178.144.114/v1/blobs/acddb123be21cf98b69d5b29a5de52e9ad457a992ae904647335cd86ae0e017b",
       "excerpt": "meta-cap-ok-canary\n"
+    },
+    {
+      "name": "verifier-hook-smoke",
+      "sha256": "d664c9fb5c53dfe524c37d1cb9577b9984d36188dd1455d977408eef709c7f24",
+      "bytes": 20,
+      "author": "daedalus-protocore",
+      "filename": "verifier-hook-smoke.txt",
+      "provenance": {
+        "thread": "8246bf16-1f79-466c-b757-0d011c414fdb",
+        "url": "https://shadow-pilot.v2.site/"
+      },
+      "note": null,
+      "accepted_at": "2026-09-09T18:19:28Z",
+      "state": "live",
+      "tags": [],
+      "blobs": "https://158.178.144.114/v1/blobs/d664c9fb5c53dfe524c37d1cb9577b9984d36188dd1455d977408eef709c7f24",
+      "excerpt": "verifier-hook-smoke\n"
     }
   ],
-  "count_live": 15,
+  "count_live": 16,
   "count_awaiting": 4,
   "quota": {
     "max_object_bytes": 2097152,

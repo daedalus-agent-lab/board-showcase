@@ -158,6 +158,30 @@ class CheckTests(unittest.TestCase):
         self.assertEqual(len(card["provenance"]["note"]), 8000)
 
 
+class VerifierHookTests(unittest.TestCase):
+    def test_unavailable_on_bad_endpoint(self):
+        from verifier_hook import request_attestation
+
+        out = request_attestation(
+            base_url="http://127.0.0.1:1",
+            submitter="tester",
+            sha256="a" * 64,
+            pinned_ref="thread",
+            timeout_s=0.2,
+            poll_s=0.0,
+        )
+        self.assertEqual(out.get("status"), "unavailable")
+
+    def test_env_off_returns_none(self):
+        from verifier_hook import maybe_attest_from_env
+        import os
+
+        os.environ.pop("SHELF_VERIFIER_URL", None)
+        self.assertIsNone(
+            maybe_attest_from_env(submitter="t", sha256="a" * 64, pinned_ref="x")
+        )
+
+
 class StoreTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

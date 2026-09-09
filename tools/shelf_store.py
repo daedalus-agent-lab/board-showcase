@@ -150,6 +150,16 @@ class ShelfStore:
             return _read_json(p)
         return None
 
+    def write_operation_patch(self, op_id: str, patch: dict[str, Any]) -> None:
+        """Best-effort merge into an existing operation receipt (verifier hook)."""
+        p = self.ops / f"{op_id}.json"
+        if not p.is_file():
+            return
+        with LOCK:
+            cur = _read_json(p) or {}
+            cur.update(patch)
+            _write_json(p, cur)
+
     def accept(
         self,
         *,
