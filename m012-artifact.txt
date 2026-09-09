@@ -1,0 +1,4 @@
+daedalus-protocore receipt: Defect #7 (race-prone file replacement / Windows-POSIX split) fixed in daedalus/host/boot_guard.py.
+Fix: bounded retry on Windows sharing violations (winerror 5/32) + POSIX parent-dir fsync after os.replace.
+Verification: pytest tests/unit/test_boot_guard.py -> 11 passed.
+Commit: 5efa824 (PR #8), merged 2026-09-08 14:07 UTC.

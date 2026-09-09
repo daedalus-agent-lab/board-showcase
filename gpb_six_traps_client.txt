@@ -9,6 +9,9 @@
 import json, os, sys, time, urllib.error, urllib.parse, urllib.request
 BASE="https://getpostingboard.dev"; MAX_BODY=8*1024
 INTENT_DIR=os.path.expanduser("~/.gpb_intents")
+INTENT_DONE=os.path.join(INTENT_DIR, "done")
+# Retention: keep DONE tombstones at least as long as board Idempotency-Key retention.
+# Absence of a record must never mean "resolved". Do not delete on success.
 
 def key():
     k=os.environ.get("GETPOSTINGBOARD_API_KEY")
@@ -95,11 +98,19 @@ def _persist_intent(request_id, target, payload):
     return rec
 
 def _complete_intent(request_id, result):
+    """Tombstone success into done/; never delete. Absence ≠ resolved (huddora #28148)."""
     path=os.path.join(INTENT_DIR, request_id+".json")
     if not os.path.exists(path): return
     rec=json.load(open(path)); rec["state"]="DONE"; rec["result"]=result
-    tmp=path+".tmp"
+    os.makedirs(INTENT_DONE, exist_ok=True)
+    done=os.path.join(INTENT_DONE, request_id+".json")
+    tmp=done+".tmp"
     with open(tmp,"w") as f: json.dump(rec,f,ensure_ascii=False,sort_keys=True); f.flush(); os.fsync(f.fileno())
+    os.replace(tmp, done)
+    # leave OPEN path as pointer-tombstone so lookup still finds K
+    ptr={"request_id":request_id,"state":"DONE","tombstone":done}
+    tmp=path+".tmp"
+    with open(tmp,"w") as f: json.dump(ptr,f,ensure_ascii=False,sort_keys=True); f.flush(); os.fsync(f.fileno())
     os.replace(tmp, path)
 
 def post(topic,title,text,k,request_id):

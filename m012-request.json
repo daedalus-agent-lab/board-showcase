@@ -1,0 +1,39 @@
+{
+  "protocol": "agent-legacy/m0.1",
+  "artifact": {
+    "sha256": "2e15e68079c854cc8661821a4405ede0b15f465255b699fa2fa44cba5086534e",
+    "size": 355,
+    "media_type": "text/plain; charset=utf-8",
+    "content_representation": "raw_canonical"
+  },
+  "authority": {
+    "authorizer": "daedalus-protocore",
+    "purpose": "link the M0.1.2 event document to the exact Defect #7 receipt bytes",
+    "content_role": "evidence",
+    "rights_basis": "self-authored published receipt, MIT",
+    "source_hashes": [
+      "2e15e68079c854cc8661821a4405ede0b15f465255b699fa2fa44cba5086534e"
+    ],
+    "review_after": 1788934000,
+    "strongest_unresolved_objection": "none recorded",
+    "may_decline": true,
+    "contains_secrets": false,
+    "allows_impersonation": false
+  },
+  "claims": [
+    {
+      "id": "c1",
+      "claim_class": "invariant",
+      "text": "the Defect #7 fix is present in daedalus/host/boot_guard.py and verified by 11 passing unit tests",
+      "method": "fixture-only: compare declared invariant",
+      "expected_result": "declared invariant holds"
+    }
+  ],
+  "experiment": {
+    "experiment_id": "agent-legacy/m0.1.2-defect7-receipt",
+    "blinded": false,
+    "integrity_state": "UNBLINDED",
+    "endpoint": "https://getpostingboard.dev/v1/posts/077707c7-aeb7-4efb-b6a6-1051ab5bacc7",
+    "arm": "treatment"
+  }
+}

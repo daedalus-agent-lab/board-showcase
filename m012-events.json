@@ -1,0 +1,122 @@
+{
+  "protocol_revision": "agent-legacy/m0.1.2",
+  "gates": [
+    {
+      "seq": 1,
+      "stage": "PERSISTED",
+      "result_state": "PASS",
+      "channel": {
+        "instrument": "daedalus-receipt-ledger",
+        "instrument_version": "1.0.0",
+        "controller": "daedalus-protocore",
+        "representation": "raw_canonical",
+        "visibility_layer": "local_fixture",
+        "execution_mode": "inert",
+        "clock_source": "host-utc",
+        "clock_uncertainty_ms": 0
+      },
+      "criterion": "commitment recorded",
+      "command": "fixture-only: record commitment for the Defect #7 receipt",
+      "procedure_digest": "3fc809eedf55130faa4b28f0ce9a0d97475a2611e5f0b7c82774cbf3d2b96bef",
+      "procedure_review": {
+        "reviewer": "daedalus-protocore",
+        "decision": "ACCEPT",
+        "reviewed_at": 1788934000,
+        "evidence": "fixture:procedure-review-1",
+        "procedure_digest": "3fc809eedf55130faa4b28f0ce9a0d97475a2611e5f0b7c82774cbf3d2b96bef"
+      },
+      "exit_code": 0,
+      "digest": "2e15e68079c854cc8661821a4405ede0b15f465255b699fa2fa44cba5086534e",
+      "evidence": "fixture:persisted",
+      "at": 1788934900
+    },
+    {
+      "seq": 2,
+      "stage": "RETRIEVED",
+      "result_state": "PASS",
+      "channel": {
+        "instrument": "agent_legacy.py",
+        "instrument_version": "0.1.1",
+        "controller": "astranaut01",
+        "representation": "raw_canonical",
+        "visibility_layer": "local_fixture",
+        "execution_mode": "inert",
+        "clock_source": "host-utc",
+        "clock_uncertainty_ms": 0
+      },
+      "criterion": "exact bytes retrieved",
+      "command": "python scripts/agent_legacy.py verify-retrieval request.json artifact.txt",
+      "procedure_digest": "1d4b1e3db828655ded526810edda9271f6301bcc12fd4317d2ac93e6a0ce1d55",
+      "procedure_review": {
+        "reviewer": "astranaut01",
+        "decision": "ACCEPT",
+        "reviewed_at": 1788934000,
+        "evidence": "fixture:procedure-review-2",
+        "procedure_digest": "1d4b1e3db828655ded526810edda9271f6301bcc12fd4317d2ac93e6a0ce1d55"
+      },
+      "exit_code": 0,
+      "digest": "2e15e68079c854cc8661821a4405ede0b15f465255b699fa2fa44cba5086534e",
+      "evidence": "fixture:retrieved",
+      "at": 1788935000
+    },
+    {
+      "seq": 3,
+      "stage": "INGESTED",
+      "result_state": "PASS",
+      "channel": {
+        "instrument": "inert-text-parser",
+        "instrument_version": "1.0.0",
+        "controller": "astranaut01",
+        "representation": "raw_canonical",
+        "visibility_layer": "local_fixture",
+        "execution_mode": "inert",
+        "clock_source": "host-utc",
+        "clock_uncertainty_ms": 0
+      },
+      "criterion": "consumer parsed the artifact",
+      "command": "fixture-only: parse inert text",
+      "procedure_digest": "66d485e5c21f448b2736970d252b317494947735484faeb02841ce2b275c9b45",
+      "procedure_review": {
+        "reviewer": "astranaut01",
+        "decision": "ACCEPT",
+        "reviewed_at": 1788934000,
+        "evidence": "fixture:procedure-review-3",
+        "procedure_digest": "66d485e5c21f448b2736970d252b317494947735484faeb02841ce2b275c9b45"
+      },
+      "exit_code": 0,
+      "digest": "2e15e68079c854cc8661821a4405ede0b15f465255b699fa2fa44cba5086534e",
+      "evidence": "fixture:ingested",
+      "at": 1788935100
+    },
+    {
+      "seq": 4,
+      "stage": "CLAIM_VERIFIED",
+      "result_state": "CURRENT",
+      "channel": {
+        "instrument": "independent-rechecker",
+        "instrument_version": "1.0.0",
+        "controller": "astranaut01",
+        "representation": "declared-claim",
+        "visibility_layer": "local_fixture",
+        "execution_mode": "inert",
+        "clock_source": "host-utc",
+        "clock_uncertainty_ms": 0
+      },
+      "criterion": "declared claim independently rechecked",
+      "command": "fixture-only: compare declared invariant",
+      "procedure_digest": "84cfa1d31fd19c604da8637774711ba26087cb504410937d5c4de9a3502fe523",
+      "procedure_review": {
+        "reviewer": "astranaut01",
+        "decision": "ACCEPT",
+        "reviewed_at": 1788934000,
+        "evidence": "fixture:procedure-review-4",
+        "procedure_digest": "84cfa1d31fd19c604da8637774711ba26087cb504410937d5c4de9a3502fe523"
+      },
+      "exit_code": 0,
+      "digest": "2e15e68079c854cc8661821a4405ede0b15f465255b699fa2fa44cba5086534e",
+      "evidence": "fixture:claim_verified",
+      "at": 1788935200
+    }
+  ],
+  "retrospective_audits": []
+}
