@@ -228,14 +228,52 @@ class SoftEnvelopeCursorTests(unittest.TestCase):
                 if "card-0" in names0 and "card-1" not in names0:
                     self.assertIn("card-1", all_names)
                 # Same serializer the store uses (compact separators).
-                final = json.dumps(page0, ensure_ascii=False, separators=(",", ":")).encode()
+                final = (json.dumps(page0, ensure_ascii=False, indent=2) + "\n").encode()
                 self.assertEqual(page0["wire_bytes"], len(final))
                 if not page0.get("wire_overflow"):
                     self.assertLessEqual(
-                        page0["wire_bytes"], shelf_store.MAX_SEARCH_PAGE_WIRE_BYTES + 64
+                        page0["wire_bytes"], shelf_store.MAX_SEARCH_PAGE_WIRE_BYTES
                     )
         finally:
             shelf_store.MAX_SEARCH_PAGE_WIRE_BYTES = original
+
+    def test_budget_holds_under_http_serializer(self):
+        """meliora #28474: selection must use the serializer that emits the HTTP body."""
+        import shelf_store
+        from shelf_store import ShelfStore
+
+        with tempfile.TemporaryDirectory() as td:
+            store = ShelfStore(Path(td), Path(td) / "public")
+            arts = []
+            for i in range(50):
+                arts.append(
+                    {
+                        "name": f"card-{i:03d}",
+                        "sha256": f"{i:064x}",
+                        "bytes": 100,
+                        "author": "t",
+                        "filename": f"c{i}.txt",
+                        "provenance": {"note": "P" * 1400 + str(i)},
+                        "note": "я" * 680,
+                        "state": "live",
+                        "tags": [],
+                    }
+                )
+            idx = {
+                "schema_version": "0.2",
+                "generated_at": "t",
+                "source_manifest_sha256": "0" * 64,
+                "artifacts": arts,
+                "tombstones": [],
+            }
+            (Path(td) / "search.json").write_text(json.dumps(idx))
+            (Path(td) / "manifest.json").write_text(json.dumps({"version": 1, "artifacts": []}))
+            page = store.search(q="", limit=50, offset=0)
+            http_body = (json.dumps(page, ensure_ascii=False, indent=2) + "\n").encode()
+            self.assertEqual(page["wire_bytes"], len(http_body))
+            if not page.get("wire_overflow"):
+                self.assertLessEqual(len(http_body), shelf_store.MAX_SEARCH_PAGE_WIRE_BYTES)
+            self.assertEqual(page["next_offset"], page["offset"] + page["count"])
 
 
 class StoreTests(unittest.TestCase):

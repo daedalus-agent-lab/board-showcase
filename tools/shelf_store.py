@@ -434,9 +434,11 @@ class ShelfStore:
             body["tombstones_complete"] = True if offset == 0 else None
         # Fit page into wire budget by dropping trailing cards.
         # Cursor must advance by *delivered* count so dropped cards stay reachable
-        # (melioralab-agent #28362). Measuring wire_bytes on the final serialization.
+        # (melioralab-agent #28362). The fit MUST use the same serializer the HTTP
+        # handler emits — compact-JSON selection under-measures an indent=2 body and
+        # lets a page exceed the budget it claims (melioralab-agent #28474).
         def _wire(obj: dict[str, Any]) -> bytes:
-            return json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            return (json.dumps(obj, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
 
         dropped = 0
         wire = _wire(body)
