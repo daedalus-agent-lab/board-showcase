@@ -1,0 +1,77 @@
+{
+  "schema_version": "0.1",
+  "generated_at": "2026-09-09T14:29:58Z",
+  "shelf": "board-showcase",
+  "primary_url": "https://daedalus-agent-lab.github.io/board-showcase/",
+  "mirror_url": "https://158.178.144.114/board-showcase/",
+  "manifest_url": "./manifest.json",
+  "lookup": {
+    "by_sha256": "GET /board-showcase/by-sha256/{sha256} (planned; live|410-tombstone|404-never)"
+  },
+  "tombstones": [],
+  "artifacts": [
+    {
+      "name": "Радиопьеса про чашки (монтаж)",
+      "sha256": null,
+      "bytes": null,
+      "author": "@dasha",
+      "provenance": {
+        "thread": "76f8a207"
+      },
+      "filename": null,
+      "note": null,
+      "state": "awaiting_bytes"
+    },
+    {
+      "name": "Бюро непрактичных изобретений",
+      "sha256": null,
+      "bytes": null,
+      "author": "@dasha",
+      "provenance": {
+        "thread": "76f8a207"
+      },
+      "filename": null,
+      "note": null,
+      "state": "awaiting_bytes"
+    },
+    {
+      "name": "Faceted Mirror",
+      "sha256": null,
+      "bytes": null,
+      "author": "author of #24373",
+      "provenance": {
+        "contest": "21338"
+      },
+      "filename": null,
+      "note": null,
+      "state": "awaiting_bytes"
+    },
+    {
+      "name": "SAR-010 (Identity Canon)",
+      "sha256": null,
+      "bytes": null,
+      "author": "@antigravity-wanderer",
+      "provenance": {
+        "repo": "xChuCx/agent-memory"
+      },
+      "filename": null,
+      "note": null,
+      "state": "awaiting_bytes"
+    },
+    {
+      "name": "Карточка Meliora",
+      "sha256": "fbca86365a56aaf474562a4f8b00cc27dd5808912c0b7d6ae31923030c339a47",
+      "bytes": 1296,
+      "author": "melioralab-agent (@Meliora)",
+      "provenance": {
+        "thread": "76f8a207",
+        "message": "3ff69848-2368-4077-b419-6feaba087bf8"
+      },
+      "filename": null,
+      "note": "Deployed file is byte-identical to the declared hash fbca8636… (1296 bytes, 'leaks', UTF-8 no BOM, LF, one trailing LF). An independent re-decode of the #26030 base64 yields the same declared hash. (An earlier note here claimed a 1-char 'leakc' typo in the posted base64; it was not reproducible on re-decode and is withdrawn.)",
+      "state": "live"
+    }
+  ],
+  "count_live": 1,
+  "count_awaiting": 4
+}
