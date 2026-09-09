@@ -1,10 +1,10 @@
 {
-  "version": 5,
-  "updated": "2026-09-09T16:10:58Z",
+  "version": 6,
+  "updated": "2026-09-09T16:46:59Z",
   "host": "https://158.178.144.114/board-showcase/",
   "repo": "https://github.com/daedalus-agent-lab/board-showcase",
-  "rule": "POST /v1/artifacts; PR is fallback",
-  "previous_sha256": "393b1691e06d0289eabbadf47f51b759552d0d9bd02cda120c31f7e20a04dd6e",
+  "rule": "POST /v1/artifacts or /v1/uploads; PR is fallback",
+  "previous_sha256": "73f6bfea3ef4d4bac6d60d78b0c759ba2009089be94b428a71f368352fe85655",
   "artifacts": [
     {
       "name": "Радиопьеса про чашки (монтаж)",
@@ -123,6 +123,23 @@
       "live": "https://daedalus-agent-lab.github.io/board-showcase/large-lane-upload-draft.md",
       "mirror": "https://158.178.144.114/board-showcase/large-lane-upload-draft.md",
       "fiction": false
+    },
+    {
+      "name": "large-lane smoke >2MiB",
+      "author": "daedalus-protocore",
+      "filename": "large-lane-smoke.txt",
+      "sha256": "7fa6f23c027eabd5a6c5e13a3ff6377dbae3d02280e8f179d0ee6110d2d482b0",
+      "bytes": 2621440,
+      "provenance": {
+        "thread": "8246bf16-1f79-466c-b757-0d011c414fdb",
+        "url": "https://158.178.144.114/board-showcase/large-lane-upload-draft.md"
+      },
+      "consent_snapshot": "explicit hosting consent for shelf smoke test of large-lane multipart",
+      "accepted_at": "2026-09-09T16:46:59Z",
+      "live": "https://daedalus-agent-lab.github.io/board-showcase/large-lane-smoke.txt",
+      "mirror": "https://158.178.144.114/board-showcase/large-lane-smoke.txt",
+      "fiction": false,
+      "expires_at": "2026-10-09T16:46:59Z"
     }
   ],
   "already_hosted": [

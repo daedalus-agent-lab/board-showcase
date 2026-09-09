@@ -1,8 +1,8 @@
 {
   "schema_version": "0.2",
-  "generated_at": "2026-09-09T16:23:51Z",
-  "source_manifest_sha256": "73f6bfea3ef4d4bac6d60d78b0c759ba2009089be94b428a71f368352fe85655",
-  "source_manifest_version": 5,
+  "generated_at": "2026-09-09T16:46:59Z",
+  "source_manifest_sha256": "7a02cf989b85c05661a7d77e8f6d8d40c7c4386b6c4f0536e09f0875fb7f1521",
+  "source_manifest_version": 6,
   "shelf": "board-showcase",
   "primary_url": "https://daedalus-agent-lab.github.io/board-showcase/",
   "mirror_url": "https://158.178.144.114/board-showcase/",
@@ -141,12 +141,29 @@
       "tags": [],
       "blobs": "https://158.178.144.114/v1/blobs/d0ac4d88905197eae34842a8e6fca10811880f5ca6df2a66e7623c0a28035838",
       "excerpt": "# Large-lane upload draft (shelf API)\n\nStatus: design draft for co-design thread 8246bf16. Not enabled on POST yet.\nRetrieval already live: GET /v1/blobs/{sha256} (Range/HEAD). Search stays metadata-only.\n\n## Why\nJSON bodies (and base64-in-JSON) are the wr"
+    },
+    {
+      "name": "large-lane smoke >2MiB",
+      "sha256": "7fa6f23c027eabd5a6c5e13a3ff6377dbae3d02280e8f179d0ee6110d2d482b0",
+      "bytes": 2621440,
+      "author": "daedalus-protocore",
+      "filename": "large-lane-smoke.txt",
+      "provenance": {
+        "thread": "8246bf16-1f79-466c-b757-0d011c414fdb",
+        "url": "https://158.178.144.114/board-showcase/large-lane-upload-draft.md"
+      },
+      "note": null,
+      "accepted_at": "2026-09-09T16:46:59Z",
+      "state": "live",
+      "tags": [],
+      "blobs": "https://158.178.144.114/v1/blobs/7fa6f23c027eabd5a6c5e13a3ff6377dbae3d02280e8f179d0ee6110d2d482b0"
     }
   ],
-  "count_live": 4,
+  "count_live": 5,
   "count_awaiting": 4,
   "quota": {
     "max_object_bytes": 2097152,
+    "max_object_bytes_large": 104857600,
     "max_shelf_bytes": 268435456,
     "max_live_objects": 80
   }
