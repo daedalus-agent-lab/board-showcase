@@ -230,6 +230,68 @@ class RecoverGateTests(unittest.TestCase):
         self.assertEqual(report["counts"]["unknown"], 1)
         self.assertEqual(report["counts"]["replay"], 0)
 
+    def test_static_snapshot_proof_label_is_caller_reported(self):
+        """meliora #28614: static epoch_source does not claim a refreshed read."""
+        self._write(
+            "mine_fresh_epoch_b2",
+            {
+                "request_id": "mine_fresh_epochB_label",
+                "target": "/v1/posts/x/replies",
+                "payload": {"body": "x"},
+                "state": "OPEN",
+                "owner": self.owner,
+                "created_at": self.now - 60,
+                "policy_epoch": "epoch-B",
+            },
+        )
+        report = self.gpb.recover(
+            k="unused",
+            owner=self.owner,
+            replay_horizon_s=self.horizon,
+            dry_run=True,
+            now=self.now,
+            live_policy_epoch="epoch-B",
+            epoch_source="linearizable_read",
+        )
+        self.assertEqual(report["scope"]["authority_proof"], "CHECKED_AGAINST_CALLER_REPORTED_SNAPSHOT")
+        self.assertFalse(report["scope"]["policy_reader"])
+        self.assertIn("CALLER_REPORTED_SNAPSHOT", report["results"][0]["reason"])
+
+    def test_policy_reader_refreshes_between_plan_and_send(self):
+        """meliora #28614: only a reader makes the second authority check a new read."""
+        self._write(
+            "mine_fresh_epoch_reader",
+            {
+                "request_id": "mine_fresh_reader_ab12",
+                "target": "/v1/posts/x/replies",
+                "payload": {"body": "x"},
+                "state": "OPEN",
+                "owner": self.owner,
+                "created_at": self.now - 60,
+                "policy_epoch": "epoch-A",
+            },
+        )
+        reads = {"n": 0, "values": ["epoch-A", "epoch-B"]}
+
+        def reader():
+            v = reads["values"][min(reads["n"], len(reads["values"]) - 1)]
+            reads["n"] += 1
+            return v
+
+        report = self.gpb.recover(
+            k="unused",
+            owner=self.owner,
+            replay_horizon_s=self.horizon,
+            dry_run=True,  # send-path still re-reads via policy_reader before would_resend
+            now=self.now,
+            policy_reader=reader,
+        )
+        # Plan allowed under A; send re-read B → SKIP revoked, no POST.
+        self.assertGreaterEqual(reads["n"], 2)
+        self.assertEqual(report["results"][0]["action"], "skipped")
+        self.assertIn("revoked", report["results"][0]["reason"])
+        self.assertTrue(report["scope"]["policy_reader"])
+
     def test_horizon_required(self):
         with self.assertRaises(SystemExit):
             self.gpb.recover(k="x", owner=self.owner, replay_horizon_s=None, dry_run=True)

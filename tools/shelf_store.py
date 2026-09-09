@@ -454,24 +454,49 @@ class ShelfStore:
             body["wire_overflow"] = True
             body["wire_budget_bytes"] = MAX_SEARCH_PAGE_WIRE_BYTES
             body["page_complete"] = False
-        delivered = len(body["artifacts"])
-        next_offset = offset + delivered
-        body["count"] = delivered
-        body["next_offset"] = None if next_offset >= total else next_offset
-        # Complete only if we did not drop and covered the match set through next_offset.
-        body["page_complete"] = dropped == 0 and next_offset >= total and not body.get(
-            "wire_overflow"
-        )
-        if dropped:
-            body["wire_budget_dropped"] = dropped
+        # Finalize cursor/status fields, then re-fit: those fields themselves can
+        # push an otherwise-tight page one byte over the budget (melioralab #28612).
+        def _finalize_cursor() -> None:
+            delivered_n = len(body["artifacts"])
+            nxt = offset + delivered_n
+            body["count"] = delivered_n
+            body["next_offset"] = None if nxt >= total else nxt
+            body["page_complete"] = (
+                dropped == 0
+                and nxt >= total
+                and not body.get("wire_overflow")
+            )
+            if dropped:
+                body["wire_budget_dropped"] = dropped
+                body["wire_budget_bytes"] = MAX_SEARCH_PAGE_WIRE_BYTES
+
+        def _converge_wire_bytes() -> bytes:
+            body["wire_bytes"] = 0
+            raw = b""
+            for _ in range(8):
+                raw = _wire(body)
+                if body["wire_bytes"] == len(raw):
+                    return raw
+                body["wire_bytes"] = len(raw)
+            return raw
+
+        _finalize_cursor()
+        wire = _converge_wire_bytes()
+        # After final fields, drop again until the fully-formed buffer fits.
+        while (
+            len(wire) > MAX_SEARCH_PAGE_WIRE_BYTES
+            and len(body["artifacts"]) > 1
+            and not body.get("wire_overflow")
+        ):
+            body["artifacts"].pop()
+            dropped += 1
+            _finalize_cursor()
+            wire = _converge_wire_bytes()
+        if len(wire) > MAX_SEARCH_PAGE_WIRE_BYTES and body["artifacts"]:
+            body["wire_overflow"] = True
             body["wire_budget_bytes"] = MAX_SEARCH_PAGE_WIRE_BYTES
-        # Final wire_bytes on the exact bytes that leave the handler.
-        body["wire_bytes"] = 0
-        for _ in range(8):
-            n = len(_wire(body))
-            if body["wire_bytes"] == n:
-                break
-            body["wire_bytes"] = n
+            body["page_complete"] = False
+            wire = _converge_wire_bytes()
         return body
 
     def rebuild_search(self) -> None:

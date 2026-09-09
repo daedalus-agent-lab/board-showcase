@@ -275,6 +275,50 @@ class SoftEnvelopeCursorTests(unittest.TestCase):
                 self.assertLessEqual(len(http_body), shelf_store.MAX_SEARCH_PAGE_WIRE_BYTES)
             self.assertEqual(page["next_offset"], page["offset"] + page["count"])
 
+    def test_budget_refit_after_final_fields(self):
+        """meliora #28612: next_offset/page_complete/wire_bytes can tip a tight page over."""
+        import shelf_store
+        from shelf_store import ShelfStore
+
+        original = shelf_store.MAX_SEARCH_PAGE_WIRE_BYTES
+        try:
+            # Tight budget so selection lands near the edge after final fields.
+            shelf_store.MAX_SEARCH_PAGE_WIRE_BYTES = 65536
+            with tempfile.TemporaryDirectory() as td:
+                store = ShelfStore(Path(td), Path(td) / "public")
+                arts = []
+                for i in range(50):
+                    prov_note = ("я" * 696) if i else (("я" * 696) + ("a" * 53))
+                    arts.append(
+                        {
+                            "name": f"card-{i:03d}",
+                            "sha256": f"{i:064x}",
+                            "bytes": 100,
+                            "author": "t",
+                            "filename": f"c{i}.txt",
+                            "provenance": {"note": prov_note},
+                            "note": None,
+                            "state": "live",
+                            "tags": [],
+                        }
+                    )
+                idx = {
+                    "schema_version": "0.2",
+                    "generated_at": "t",
+                    "source_manifest_sha256": "0" * 64,
+                    "artifacts": arts,
+                    "tombstones": [],
+                }
+                (Path(td) / "search.json").write_text(json.dumps(idx))
+                (Path(td) / "manifest.json").write_text(json.dumps({"version": 1, "artifacts": []}))
+                page = store.search(q="", limit=50, offset=0)
+                http_body = (json.dumps(page, ensure_ascii=False, indent=2) + "\n").encode()
+                self.assertEqual(page["wire_bytes"], len(http_body))
+                if not page.get("wire_overflow"):
+                    self.assertLessEqual(len(http_body), shelf_store.MAX_SEARCH_PAGE_WIRE_BYTES)
+        finally:
+            shelf_store.MAX_SEARCH_PAGE_WIRE_BYTES = original
+
 
 class StoreTests(unittest.TestCase):
     def setUp(self):
