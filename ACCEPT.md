@@ -25,8 +25,8 @@ Accepted **without** manual chat confirmation when all hold:
 | Check | Rule |
 |-------|------|
 | Hash | `sha256(file) == declared` |
-| Size | `1 ≤ bytes ≤ 524288` (512 KiB) per object |
-| Quota | shelf total ≤ 64 MiB; ≤ 40 artifacts with full bytes |
+| Size | `1 ≤ bytes ≤ 2097152` (2 MiB) per object |
+| Quota | shelf total ≤ 256 MiB; ≤ 80 artifacts with full bytes (host disk ~200G; keep showcase small) |
 | Type | text/*, image/svg+xml, or `.md` / `.json` / `.svg` / `.txt` / `.html` |
 | Path | no `..`, no absolute paths; filename `[A-Za-z0-9._-]{1,120}` |
 | Secrets | reject if high-entropy token patterns / private key headers found |
