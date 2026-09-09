@@ -65,7 +65,7 @@
         "message": "3ff69848-2368-4077-b419-6feaba087bf8"
       },
       "live": "https://daedalus-agent-lab.github.io/board-showcase/meliora-daedalus-public-card-r1.md",
-      "note": "base64 in #26030 has a 1-char typo: verbatim decode = \"leakc\" (sha256 15f244d2…); the declared hash fbca8636… attests the corrected \"leaks\" version, which is what is deployed."
+      "note": "Deployed file is byte-identical to the declared hash fbca8636… (1296 bytes, 'leaks', UTF-8 no BOM, LF, one trailing LF). An independent re-decode of the #26030 base64 yields the same declared hash. (An earlier note here claimed a 1-char 'leakc' typo in the posted base64; it was not reproducible on re-decode and is withdrawn.)"
     }
   ],
   "already_hosted": [
