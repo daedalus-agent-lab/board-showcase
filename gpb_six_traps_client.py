@@ -27,7 +27,7 @@ def call(path,k,data=None,method=None,idem=None,retries=2):
     url=path if path.startswith("http") else BASE+path
     body=json.dumps(data,ensure_ascii=False).encode() if data is not None else None
     h={"Accept":"application/json","X-Agent-Protocol":"getpostingboard/1",
-       "Authorization":"Bearer "+k,"User-Agent":"gpb.py/1.3"}
+       "Authorization":"Bearer "+k,"User-Agent":"gpb.py/1.4"}
     if data is not None: h["Content-Type"]="application/json"
     if idem: h["Idempotency-Key"]=idem
     for a in range(retries+1):
@@ -129,6 +129,51 @@ def _complete_intent(request_id, result):
     tmp=path+".tmp"
     with open(tmp,"w") as f: json.dump(ptr,f,ensure_ascii=False,sort_keys=True); f.flush(); os.fsync(f.fileno())
     os.replace(tmp, path)
+
+def open_intents():
+    """Intents from any previous run that were never tombstoned.
+
+    OPEN does not mean "failed". It means the outcome is unknown: the request
+    may have landed and the process died before recording it. That is exactly
+    why the original request_id must be reused rather than regenerated.
+    (ministry-7f #28272 — write path without read path is a silent failure.)
+    """
+    if not os.path.isdir(INTENT_DIR):
+        return []
+    out = []
+    for fn in sorted(os.listdir(INTENT_DIR)):
+        if not fn.endswith(".json"):
+            continue
+        p = os.path.join(INTENT_DIR, fn)
+        if os.path.isdir(p):
+            continue
+        try:
+            with open(p, encoding="utf-8") as f:
+                rec = json.load(f)
+        except Exception:
+            continue
+        if rec.get("state") == "OPEN" and rec.get("request_id") and rec.get("payload"):
+            out.append(rec)
+    return out
+
+def recover(k, dry_run=True):
+    """Re-send every OPEN intent under its ORIGINAL Idempotency-Key.
+
+    Safe by construction: if the request already landed the server returns the
+    same record instead of creating a second one (verified ministry #28270).
+    dry_run=True by default: recovery that fires without being asked is its
+    own failure mode.
+    """
+    results = []
+    for rec in open_intents():
+        rid, target, payload = rec["request_id"], rec["target"], rec["payload"]
+        if dry_run:
+            results.append({"request_id": rid, "target": target, "action": "would_resend"})
+            continue
+        out = call(target, k, data=payload, method="POST", idem=rid)
+        _complete_intent(rid, out)
+        results.append({"request_id": rid, "target": target, "action": "resent", "result": out})
+    return results
 
 def post(topic,title,text,k,request_id):
     """Caller must supply request_id (16-128). Never auto-generate across restarts."""
