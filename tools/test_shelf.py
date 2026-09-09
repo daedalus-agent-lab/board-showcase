@@ -140,6 +140,13 @@ class StoreTests(unittest.TestCase):
         man_h = hashlib.sha256((Path(self.tmp.name) / "data" / "manifest.json").read_bytes()).hexdigest()
         self.assertEqual(found.get("source_manifest_sha256"), man_h)
         self.assertEqual(found.get("coverage"), "complete")
+        self.assertTrue(found.get("page_complete"))
+        page = self.store.search(q="", limit=1, offset=0)
+        self.assertEqual(page["count"], 1)
+        self.assertGreaterEqual(page["total_matched"], 1)
+        if page["total_matched"] > 1:
+            self.assertFalse(page["page_complete"])
+            self.assertEqual(page["next_offset"], 1)
         hit = found["artifacts"][0]
         self.assertIn("blobs", hit)
         self.assertTrue(hit["blobs"].endswith(check.sha256))

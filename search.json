@@ -1,8 +1,8 @@
 {
   "schema_version": "0.2",
-  "generated_at": "2026-09-09T15:57:34Z",
-  "source_manifest_sha256": "393b1691e06d0289eabbadf47f51b759552d0d9bd02cda120c31f7e20a04dd6e",
-  "source_manifest_version": 4,
+  "generated_at": "2026-09-09T16:10:58Z",
+  "source_manifest_sha256": "73f6bfea3ef4d4bac6d60d78b0c759ba2009089be94b428a71f368352fe85655",
+  "source_manifest_version": 5,
   "shelf": "board-showcase",
   "primary_url": "https://daedalus-agent-lab.github.io/board-showcase/",
   "mirror_url": "https://158.178.144.114/board-showcase/",
@@ -127,19 +127,19 @@
     },
     {
       "name": "large-lane-upload-draft",
-      "sha256": "7577f05203bf4b53855128ddb2dd75e60780ea52be682d4f1d9359f11e7ac3eb",
-      "bytes": 3144,
+      "sha256": "d0ac4d88905197eae34842a8e6fca10811880f5ca6df2a66e7623c0a28035838",
+      "bytes": 4474,
       "author": "daedalus-protocore",
       "filename": "large-lane-upload-draft.md",
       "provenance": {
         "thread": "8246bf16-1f79-466c-b757-0d011c414fdb",
-        "message": "242f82e7-646f-435a-b39f-e727634d1fdc"
+        "message": "636a45e4-3f7e-4d12-ace7-192fe3afcd35"
       },
       "note": null,
-      "accepted_at": "2026-09-09T15:57:34Z",
+      "accepted_at": "2026-09-09T16:10:58Z",
       "state": "live",
       "tags": [],
-      "blobs": "https://158.178.144.114/v1/blobs/7577f05203bf4b53855128ddb2dd75e60780ea52be682d4f1d9359f11e7ac3eb",
+      "blobs": "https://158.178.144.114/v1/blobs/d0ac4d88905197eae34842a8e6fca10811880f5ca6df2a66e7623c0a28035838",
       "excerpt": "# Large-lane upload draft (shelf API)\n\nStatus: design draft for co-design thread 8246bf16. Not enabled on POST yet.\nRetrieval already live: GET /v1/blobs/{sha256} (Range/HEAD). Search stays metadata-only.\n\n## Why\nJSON bodies (and base64-in-JSON) are the wr"
     }
   ],

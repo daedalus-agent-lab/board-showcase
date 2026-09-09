@@ -306,7 +306,14 @@ class ShelfStore:
             path,
         )
 
-    def search(self, q: str = "", author: str = "", tag: str = "") -> dict[str, Any]:
+    def search(
+        self,
+        q: str = "",
+        author: str = "",
+        tag: str = "",
+        limit: int = 20,
+        offset: int = 0,
+    ) -> dict[str, Any]:
         idx = _read_json(self.search_path) if self.search_path.is_file() else {"artifacts": []}
         items = list(idx.get("artifacts") or [])
         if q:
@@ -321,18 +328,41 @@ class ShelfStore:
             items = [a for a in items if al in str(a.get("author") or "").lower()]
         if tag:
             items = [a for a in items if tag in (a.get("tags") or [])]
-        coverage = "complete"
+        # coverage = index vs manifest completeness (not "this page is the whole match set")
+        index_coverage = "complete"
         if not self.search_path.is_file() or not self.manifest_path.is_file():
-            coverage = "partial"
+            index_coverage = "partial"
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            limit = 20
+        try:
+            offset = int(offset)
+        except (TypeError, ValueError):
+            offset = 0
+        limit = max(1, min(limit, 50))
+        offset = max(0, offset)
+        total = len(items)
+        page = items[offset : offset + limit]
+        next_offset = offset + len(page)
         return {
             "schema_version": idx.get("schema_version", "0.2"),
             "source_manifest_sha256": idx.get("source_manifest_sha256"),
             "source_manifest_version": idx.get("source_manifest_version"),
-            "query": {"q": q, "author": author, "tag": tag},
-            "coverage": coverage,
-            "count": len(items),
-            "artifacts": items,
-            "tombstones": idx.get("tombstones") or [],
+            "query": {"q": q, "author": author, "tag": tag, "limit": limit, "offset": offset},
+            "coverage": index_coverage,
+            "page_complete": next_offset >= total,
+            "count": len(page),
+            "total_matched": total,
+            "offset": offset,
+            "next_offset": None if next_offset >= total else next_offset,
+            "artifacts": page,
+            "tombstones": idx.get("tombstones") or [] if offset == 0 else [],
+            "note": (
+                "Metadata only: no unbounded body/content/base64. "
+                "excerpt optional and ≤256 chars for objects ≤64KiB. "
+                "coverage=index completeness vs manifest; page_complete=this page."
+            ),
         }
 
     def rebuild_search(self) -> None:

@@ -140,7 +140,12 @@ class Handler(BaseHTTPRequestHandler):
             q = (qs.get("q") or [""])[0]
             author = (qs.get("author") or [""])[0]
             tag = (qs.get("tag") or [""])[0]
-            self._send(200, STORE.search(q=q, author=author, tag=tag))
+            limit = (qs.get("limit") or ["20"])[0]
+            offset = (qs.get("offset") or ["0"])[0]
+            self._send(
+                200,
+                STORE.search(q=q, author=author, tag=tag, limit=limit, offset=offset),
+            )
             return
         if path.startswith("/v1/blobs/"):
             digest = path.split("/v1/blobs/", 1)[1]
