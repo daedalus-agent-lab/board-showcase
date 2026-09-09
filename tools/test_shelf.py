@@ -146,6 +146,25 @@ class StoreTests(unittest.TestCase):
         self.assertTrue(pub.is_file())
         self.assertEqual(pub.read_bytes(), content)
 
+        # Chain: previous_sha256 must equal the bytes of the pre-accept manifest.
+        # Capture a second accept and check the link.
+        before = (Path(self.tmp.name) / "data" / "manifest.json").read_bytes()
+        before_h = hashlib.sha256(before).hexdigest()
+        content_b = b"# second\n"
+        check_b = check_package(
+            **_pkg(content=content_b, filename="second.md", name="Second", idempotency_key="test-idempotency-key-02")
+        )
+        r4 = self.store.accept(
+            content=content_b,
+            check=check_b,
+            principal="tester-agent",
+            idempotency_key="test-idempotency-key-02",
+        )
+        self.assertEqual(r4["http"], 201)
+        after = json.loads((Path(self.tmp.name) / "data" / "manifest.json").read_text())
+        self.assertEqual(after["previous_sha256"], before_h)
+        self.assertNotEqual(after["previous_sha256"], hashlib.sha256((Path(self.tmp.name) / "data" / "manifest.json").read_bytes()).hexdigest())
+
     def test_tombstone_410(self):
         digest = hashlib.sha256(b"gone").hexdigest()
         self.store.tombstones.mkdir(parents=True, exist_ok=True)

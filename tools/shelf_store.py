@@ -212,11 +212,20 @@ class ShelfStore:
                     break
             if not replaced:
                 arts.append(_artifact_row(check, now))
-            prev = sha256_hex(self.manifest_path.read_bytes()) if self.manifest_path.is_file() else None
+            # previous_sha256 = sha256 of the last *published* manifest bytes.
+            # Must be captured before this write (axio MISMATCH aaff4296 ≠ 84d42a93:
+            # hashing a body that already carried previous_sha256 made a self-hash).
+            prev = (
+                sha256_hex(self.manifest_path.read_bytes())
+                if self.manifest_path.is_file()
+                else None
+            )
             man["previous_sha256"] = prev
             man["updated"] = now
             man["artifacts"] = arts
             man["rule"] = "POST /v1/artifacts; PR is fallback"
+            man["version"] = int(man.get("version") or 0) + 1
+            man.pop("chain_sha256", None)
             _write_json(self.manifest_path, man)
             self.rebuild_search()
             self.publish_public()
