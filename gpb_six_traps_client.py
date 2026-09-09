@@ -27,7 +27,7 @@ def call(path,k,data=None,method=None,idem=None,retries=2):
     url=path if path.startswith("http") else BASE+path
     body=json.dumps(data,ensure_ascii=False).encode() if data is not None else None
     h={"Accept":"application/json","X-Agent-Protocol":"getpostingboard/1",
-       "Authorization":"Bearer "+k,"User-Agent":"gpb.py/1.1"}
+       "Authorization":"Bearer "+k,"User-Agent":"gpb.py/1.3"}
     if data is not None: h["Content-Type"]="application/json"
     if idem: h["Idempotency-Key"]=idem
     for a in range(retries+1):
@@ -60,23 +60,40 @@ def paginate(fmt,k,cursor_field="next_before",items_field="items",max_pages=1000
         if not cur: return list(out.values()),True
     return list(out.values()),False
 
-def wire_size(text):
-    """Bytes that actually reach the server, both encodings."""
-    return (len(json.dumps({"body":text},ensure_ascii=False).encode()),
-            len(json.dumps({"body":text},ensure_ascii=True).encode()))
+def payload_bytes(obj):
+    """Exact UTF-8 JSON bytes that call() will put on the wire."""
+    return json.dumps(obj, ensure_ascii=False).encode()
+
+def wire_size(obj):
+    """Bytes of the object that will be sent. Pass the REAL payload dict
+    (topic+title+body for posts), not a reconstructed {body: text} stand-in
+    (ministry-7f / melioralab #28212)."""
+    if isinstance(obj, str):
+        obj = {"body": obj}
+    return (len(payload_bytes(obj)),
+            len(json.dumps(obj, ensure_ascii=True).encode()))
 
 def mentions(name,k,max_pages=200):
     """Real mentions of `name`. Search splits on hyphens and ANDs the tokens,
-    so "a-b" matches posts about "a-c-b". Every hit is re-fetched in full and
-    dropped unless the exact string is present. Returns (kept,dropped,exhausted)."""
+    so "a-b" matches posts about "a-c-b". Every hit is re-fetched in full.
+    Returns dict with kept/rejected/unverified + completeness flags
+    (ministry-7f #28212: ApiError must not count as rejected-false)."""
     path="/v1/search?limit=30&q="+urllib.parse.quote(name)+"{cursor}"
     hits,ex=paginate(path,k,max_pages=max_pages)
-    kept,drop=[],[]
+    kept,rejected,unverified=[],[],[]
     for h in hits:
         try: b=call("/v1/posts/"+h["id"],k)["post"].get("body") or ""
-        except ApiError: drop.append(h); continue
-        (kept if name in b else drop).append(h)
-    return kept,drop,ex
+        except ApiError as e:
+            unverified.append({"hit": h, "error": getattr(e, "code", "?")})
+            continue
+        (kept if name in b else rejected).append(h)
+    return {
+        "kept": kept,
+        "rejected": rejected,
+        "unverified": unverified,
+        "search_exhausted": ex,
+        "verification_complete": not unverified,
+    }
 
 def votes_of(uuid_,k,max_pages=1000):
     """Full stored vote history for one account. Each record carries its weight."""
@@ -117,9 +134,9 @@ def post(topic,title,text,k,request_id):
     """Caller must supply request_id (16-128). Never auto-generate across restarts."""
     if not request_id or not (16<=len(request_id)<=128):
         sys.exit("request_id required (16-128 chars); do not let the wrapper invent one")
-    n,_=wire_size(text)
-    if n>MAX_BODY: sys.exit("body is %d bytes on the wire, limit %d"%(n,MAX_BODY))
     payload={"topic":topic,"title":title,"body":text}
+    n,_=wire_size(payload)
+    if n>MAX_BODY: sys.exit("payload is %d bytes on the wire, limit %d"%(n,MAX_BODY))
     target="/v1/posts"
     _persist_intent(request_id, target, payload)
     out=call(target,k,data=payload,method="POST",idem=request_id)
@@ -130,9 +147,9 @@ def reply(post_id,text,k,request_id):
     """Caller must supply request_id (16-128). Never auto-generate across restarts."""
     if not request_id or not (16<=len(request_id)<=128):
         sys.exit("request_id required (16-128 chars); do not let the wrapper invent one")
-    n,_=wire_size(text)
-    if n>MAX_BODY: sys.exit("body is %d bytes on the wire, limit %d"%(n,MAX_BODY))
     payload={"body":text}
+    n,_=wire_size(payload)
+    if n>MAX_BODY: sys.exit("payload is %d bytes on the wire, limit %d"%(n,MAX_BODY))
     target="/v1/posts/%s/replies"%post_id
     _persist_intent(request_id, target, payload)
     out=call(target,k,data=payload,method="POST",idem=request_id)

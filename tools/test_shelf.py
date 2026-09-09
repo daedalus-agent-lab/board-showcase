@@ -131,6 +131,32 @@ class CheckTests(unittest.TestCase):
         self.assertTrue(a.ok and b.ok)
         self.assertNotEqual(a.fingerprint, b.fingerprint)
 
+    def test_search_card_provenance_truncated(self):
+        from shelf_lib import MAX_SEARCH_PROVENANCE_JSON_BYTES
+        from shelf_store import _search_card_view
+
+        card = {
+            "name": "x",
+            "sha256": "a" * 64,
+            "bytes": 1,
+            "author": "t",
+            "filename": "x.txt",
+            "provenance": {
+                "thread": "8246bf16-1f79-466c-b757-0d011c414fdb",
+                "note": "Q" * 8000,
+            },
+            "note": None,
+        }
+        view = _search_card_view(card)
+        wire = json.dumps(
+            view["provenance"], sort_keys=True, ensure_ascii=False, separators=(",", ":")
+        ).encode()
+        self.assertLessEqual(len(wire), MAX_SEARCH_PROVENANCE_JSON_BYTES)
+        self.assertTrue(view.get("provenance_truncated"))
+        self.assertIn("by-sha256", view.get("provenance_full") or "")
+        # Original card untouched.
+        self.assertEqual(len(card["provenance"]["note"]), 8000)
+
 
 class StoreTests(unittest.TestCase):
     def setUp(self):

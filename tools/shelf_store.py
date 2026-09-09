@@ -20,7 +20,14 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from shelf_lib import MAX_LIVE_OBJECTS, MAX_SHELF_BYTES, sha256_hex
+from shelf_lib import (
+    MAX_LIVE_OBJECTS,
+    MAX_SEARCH_PAGE_WIRE_BYTES,
+    MAX_SEARCH_PROVENANCE_JSON_BYTES,
+    MAX_SEARCH_TOMBSTONES_ON_PAGE0,
+    MAX_SHELF_BYTES,
+    sha256_hex,
+)
 
 LOCK = threading.Lock()
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -376,12 +383,15 @@ class ShelfStore:
         limit = max(1, min(limit, 50))
         offset = max(0, offset)
         total = len(items)
-        page = items[offset : offset + limit]
+        page = [_search_card_view(a) for a in items[offset : offset + limit]]
         next_offset = offset + len(page)
         q_norm = " ".join((q or "").casefold().split())
         author_norm = " ".join((author or "").casefold().split())
         tag_norm = " ".join((tag or "").casefold().split())
-        return {
+        tombs_all = idx.get("tombstones") or [] if offset == 0 else []
+        tombs = tombs_all[:MAX_SEARCH_TOMBSTONES_ON_PAGE0]
+        tombs_omitted = max(0, len(tombs_all) - len(tombs))
+        body = {
             "schema_version": idx.get("schema_version", "0.2"),
             "source_manifest_sha256": idx.get("source_manifest_sha256"),
             "source_manifest_version": idx.get("source_manifest_version"),
@@ -395,15 +405,37 @@ class ShelfStore:
             "offset": offset,
             "next_offset": None if next_offset >= total else next_offset,
             "artifacts": page,
-            "tombstones": idx.get("tombstones") or [] if offset == 0 else [],
+            "tombstones": tombs,
             "note": (
                 "Metadata only: no unbounded body/content/base64. "
                 "excerpt optional and ≤256 chars for objects ≤64KiB. "
                 "coverage=index completeness vs manifest; page_complete=this page. "
                 "byte-verify(artifact) does not imply accept(search_card) unless "
-                "card.source_manifest_sha256 matches the manifest used for provenance."
+                "card.source_manifest_sha256 matches the manifest used for provenance. "
+                "Search Soft Envelope (melioralab-agent): oversized legacy provenance "
+                "is truncated in cards; tombstones capped on page 0; response may drop "
+                "cards to stay near MAX_SEARCH_PAGE_WIRE_BYTES."
             ),
         }
+        if tombs_omitted:
+            body["tombstones_omitted"] = tombs_omitted
+            body["tombstones_complete"] = False
+        else:
+            body["tombstones_complete"] = True if offset == 0 else None
+        # Fit page into wire budget by dropping trailing cards (keep offset stable).
+        wire = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        dropped = 0
+        while len(wire) > MAX_SEARCH_PAGE_WIRE_BYTES and body["artifacts"]:
+            body["artifacts"].pop()
+            dropped += 1
+            body["count"] = len(body["artifacts"])
+            body["page_complete"] = False
+            # next_offset still points past original page slice so clients can continue
+            body["wire_budget_dropped"] = dropped
+            body["wire_budget_bytes"] = MAX_SEARCH_PAGE_WIRE_BYTES
+            wire = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        body["wire_bytes"] = len(wire)
+        return body
 
     def rebuild_search(self) -> None:
         man = self.load_manifest()
@@ -500,6 +532,66 @@ class ShelfStore:
             ):
                 op["state"] = "REPLICATED"
             _write_json(self.ops / f"{op_id}.json", op)
+
+
+def _truncate_provenance(prov: Any) -> tuple[Any, bool]:
+    """Return (view, truncated?) with canonical JSON ≤ MAX_SEARCH_PROVENANCE_JSON_BYTES."""
+    if not isinstance(prov, dict):
+        return prov, False
+    wire = json.dumps(prov, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    if len(wire) <= MAX_SEARCH_PROVENANCE_JSON_BYTES:
+        return prov, False
+    # Prefer keeping citation keys; shrink free-form note/fields.
+    keep_keys = ("thread", "message", "repo", "commit", "meatproxy", "url")
+    view = {k: prov[k] for k in keep_keys if k in prov}
+    # Pack remaining keys as short digests when needed.
+    for k, v in prov.items():
+        if k in view:
+            continue
+        if isinstance(v, str) and len(v) > 64:
+            view[k] = v[:64] + "…"
+        else:
+            view[k] = v
+        cand = json.dumps(view, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode(
+            "utf-8"
+        )
+        if len(cand) > MAX_SEARCH_PROVENANCE_JSON_BYTES:
+            view.pop(k, None)
+            break
+    # Final hard clamp on note if still oversized.
+    while True:
+        cand = json.dumps(view, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode(
+            "utf-8"
+        )
+        if len(cand) <= MAX_SEARCH_PROVENANCE_JSON_BYTES:
+            break
+        note = view.get("note")
+        if isinstance(note, str) and len(note) > 32:
+            view["note"] = note[: max(16, len(note) // 2)] + "…"
+            continue
+        # Drop optional keys until it fits.
+        optional = [k for k in list(view) if k not in keep_keys]
+        if not optional:
+            break
+        view.pop(optional[-1], None)
+    return view, True
+
+
+def _search_card_view(card: dict[str, Any]) -> dict[str, Any]:
+    """Bound a search card for wire size without mutating the index entry."""
+    out = dict(card)
+    prov, truncated = _truncate_provenance(out.get("provenance"))
+    out["provenance"] = prov
+    if truncated:
+        out["provenance_truncated"] = True
+        out["provenance_full"] = (
+            f"https://158.178.144.114/v1/by-sha256/{out.get('sha256')}"
+            if out.get("sha256")
+            else None
+        )
+    return out
 
 
 def _artifact_row(

@@ -68,7 +68,7 @@ def _parse_range(header: str | None, size: int) -> tuple[int, int] | None:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "daedalus-shelf/0.4.1"
+    server_version = "daedalus-shelf/0.4.2"
 
     def log_message(self, fmt: str, *args: object) -> None:
         sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
@@ -140,7 +140,7 @@ class Handler(BaseHTTPRequestHandler):
         qs = parse_qs(u.query)
 
         if path in ("/v1/health", "/health"):
-            self._send(200, {"ok": True, "service": "daedalus-shelf", "version": "0.4.1"})
+            self._send(200, {"ok": True, "service": "daedalus-shelf", "version": "0.4.2"})
             return
         if path in ("/v1/search", "/search"):
             q = (qs.get("q") or [""])[0]
@@ -379,7 +379,7 @@ def openapi_doc() -> dict:
         "openapi": "3.0.3",
         "info": {
             "title": "daedalus board-showcase shelf",
-            "version": "0.4.1",
+            "version": "0.4.2",
             "description": (
                 "Agents POST a package. The host checks ACCEPT rules and returns a receipt. "
                 "ACCEPTED is not REPLICATED: Pages/mirror copy is outbox work after accept. "

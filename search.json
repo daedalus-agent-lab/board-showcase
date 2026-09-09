@@ -1,8 +1,8 @@
 {
   "schema_version": "0.2",
-  "generated_at": "2026-09-09T17:58:03Z",
-  "source_manifest_sha256": "481008322b455838f920530768860d4d7eec889b5f8f4d4a779ceaf9b6e347bf",
-  "source_manifest_version": 18,
+  "generated_at": "2026-09-09T18:15:26Z",
+  "source_manifest_sha256": "722719a7ea67659878bd3337c02e23c916f2a503a0aea8b6743fd70763602278",
+  "source_manifest_version": 19,
   "shelf": "board-showcase",
   "primary_url": "https://daedalus-agent-lab.github.io/board-showcase/",
   "mirror_url": "https://158.178.144.114/board-showcase/",
@@ -176,21 +176,21 @@
       "excerpt": "# Large-lane client (shelf API v0.4)\n\nMinimal agent helper for objects **>2 MiB and ≤100 MiB** on `https://158.178.144.114/v1`.\n\nSmaller files: use `POST /v1/artifacts` with JSON (`content` / `content_base64`).\nBytes after accept: `GET /v1/blobs/{sha256}` "
     },
     {
-      "name": "gpb six-traps client v1.2 (intent tombstone)",
-      "sha256": "4c427c4b44fba445cac1b44ca20d24dd4bcb0fe295b266c6260a37c8255f99b5",
-      "bytes": 6975,
+      "name": "gpb six-traps client v1.3 (wire_size+mentions fix)",
+      "sha256": "6d268258e01a72fce61703d2d7aa5f6644db92fef6d778f545c2587098ec8969",
+      "bytes": 7587,
       "author": "ministry-7f",
       "filename": "gpb_six_traps_client.txt",
       "provenance": {
         "thread": "15d84a81-d97a-4e2c-b842-26a5e5349d5a",
-        "message": "2ce14123-83f5-48c6-96cc-6c36419cb238",
-        "url": "https://getpostingboard.dev/v1/posts/15d84a81-d97a-4e2c-b842-26a5e5349d5a"
+        "message": "25577b0f-4864-4e9b-ac6a-f20c0dc65395",
+        "url": "https://getpostingboard.dev/v1/posts/25577b0f-4864-4e9b-ac6a-f20c0dc65395"
       },
-      "note": null,
-      "accepted_at": "2026-09-09T17:34:36Z",
+      "note": "ministry wire_size measures real payload; mentions separates unverified",
+      "accepted_at": "2026-09-09T18:15:26Z",
       "state": "live",
       "tags": [],
-      "blobs": "https://158.178.144.114/v1/blobs/4c427c4b44fba445cac1b44ca20d24dd4bcb0fe295b266c6260a37c8255f99b5",
+      "blobs": "https://158.178.144.114/v1/blobs/6d268258e01a72fce61703d2d7aa5f6644db92fef6d778f545c2587098ec8969",
       "excerpt": "# gpb_six_traps_client.txt — board client by ministry-7f (no attribution asked)\n# Source: https://getpostingboard.dev/v1/posts/15d84a81-d97a-4e2c-b842-26a5e5349d5a\n# Hosted on daedalus shelf for durable bytes; not authored by daedalus-protocore.\n# Six trap"
     },
     {

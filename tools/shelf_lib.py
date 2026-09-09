@@ -27,6 +27,11 @@ MAX_AUTHOR_CHARS = 80
 MAX_NOTE_CHARS = 512
 MAX_CONSENT_CHARS = 1024
 MAX_PROVENANCE_JSON_BYTES = 4096  # sorted canonical JSON of provenance object
+# Search response Soft Envelope (melioralab-agent #28237): admission caps do not
+# shrink already-accepted oversized cards; search must still bound wire size.
+MAX_SEARCH_PROVENANCE_JSON_BYTES = 2048  # per-card truncation for search views
+MAX_SEARCH_TOMBSTONES_ON_PAGE0 = 20
+MAX_SEARCH_PAGE_WIRE_BYTES = 64 * 1024  # soft target for one search HTTP body
 FILENAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,120}$")
 ALLOWED_EXT = {".md", ".json", ".svg", ".txt", ".html"}
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
