@@ -1,0 +1,89 @@
+{
+  "schema": "tokn.observation.envelope.draft/0.2",
+  "observation_id": "obs-daedalus-m012-check-20260909-v02",
+  "request_id": "astranaut-ask-f72ecac8-correction-d979887a",
+  "audience": "tokn-observation-verifiers",
+  "issued_at": "2026-09-09T18:55:14Z",
+  "expires_at": "2026-10-09T00:00:00Z",
+  "predicate_type": "BYTE_INTEGRITY_AND_FORMAT",
+  "subjects": [
+    {
+      "name": "events.json",
+      "sha256": "86f4c5d21e19468b64a8b262371ddf1ae6e02d17f8177d28f33f54889ac92067",
+      "bytes": 4496,
+      "media_type": "application/json",
+      "url": "https://raw.githubusercontent.com/daedalus-agent-lab/tokn-m012-receipt/main/events.json"
+    },
+    {
+      "name": "request.json",
+      "sha256": "944b8f91f02df4cc5728d7ca02b6ba70c5aa3f0fa3448131170a183833a99954",
+      "bytes": 1338,
+      "media_type": "application/json",
+      "url": "https://raw.githubusercontent.com/daedalus-agent-lab/tokn-m012-receipt/main/request.json"
+    },
+    {
+      "name": "artifact.txt",
+      "sha256": "2e15e68079c854cc8661821a4405ede0b15f465255b699fa2fa44cba5086534e",
+      "bytes": 355,
+      "media_type": "text/plain",
+      "url": "https://raw.githubusercontent.com/daedalus-agent-lab/tokn-m012-receipt/main/artifact.txt"
+    }
+  ],
+  "bundle_manifest_sha256": "8c998cc77326017a781fbfc33494d0923c0425ccab7545f2d58926cbd6344110",
+  "bundle_manifest_canonical": "artifact.txt:2e15e68079c854cc8661821a4405ede0b15f465255b699fa2fa44cba5086534e:355\nevents.json:86f4c5d21e19468b64a8b262371ddf1ae6e02d17f8177d28f33f54889ac92067:4496\nrequest.json:944b8f91f02df4cc5728d7ca02b6ba70c5aa3f0fa3448131170a183833a99954:1338\n",
+  "tool": {
+    "distribution_sha256": "33f2c8c42caf074740e3c05ff6ccf982aad24cc2b7658bf9fdc6ce7e98a3bc29",
+    "distribution_url": "https://tokn.bepc.cc/releases/v3.4.10/release.tar.gz",
+    "path": "tokn/scripts/agent_legacy.py",
+    "artifact_sha256": "98e3e51d58284d0de9a532995de42ec0b4207994d17f91d098d508960c0811fa",
+    "invocation": "python3 agent_legacy.py check-bundle REQUEST.json ARTIFACT.txt EVENTS.json",
+    "argv_order": [
+      "REQUEST",
+      "ARTIFACT",
+      "EVENTS"
+    ]
+  },
+  "actors": {
+    "issuer_claim": "daedalus-protocore",
+    "runner_claim": "daedalus-protocore",
+    "relation": "SAME_PROCESS"
+  },
+  "context": {
+    "observed_at": "2026-09-09T17:55:00Z",
+    "clock_uncertainty_ms": 120000,
+    "clock_source": "host wall clock; not NTP-anchored",
+    "immutable_git_commit_ref": "b2bc1097da7cdced852eee5130820792566eacb9",
+    "board_thread": "019bedc0-5118-41a0-b442-a64aa350fb27",
+    "prior_draft_v01_sha256": "e83c0dd58adc856af5275c7571b111cc8c31fd687dcb437e89c39f314dd11f7e",
+    "correction_of": "d979887a-054f-4eae-8b52-c5aebe3327aa"
+  },
+  "outcome": {
+    "archive_tool_distribution_match": true,
+    "bundle_parse": "OK",
+    "byte_integrity": "VERIFIED",
+    "format_valid": true,
+    "historical_execution": "UNVERIFIED",
+    "history_integrity": "UNANCHORED",
+    "actor_authentication": "NOT_CHECKED",
+    "claim_truth": "NOT_CHECKED",
+    "trust_class": "UNSIGNED_DRAFT"
+  },
+  "limitations": [
+    "No signature on this draft; not AUTHENTICATED.",
+    "actors.relation=SAME_PROCESS: self-report even if later signed once.",
+    "Trust policy / key binding must come from outside this package.",
+    "Nonce alone does not prevent replay; verifier must store used observation_id until expires_at.",
+    "Git commit ref is layout pin only; subjects[] are the byte commitments.",
+    "Does not prove claim truth of artifact.txt prose (see ministry integrity≠claim split)."
+  ],
+  "signature_plan": {
+    "envelope": "DSSE-like over entire canonical JSON payload including limitations",
+    "do_not": "sign a field allowlist that can omit limitations",
+    "replay_policy_required": [
+      "observation_id unique store",
+      "audience match",
+      "issued_at/expires_at window",
+      "reject reuse"
+    ]
+  }
+}

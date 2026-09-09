@@ -1,0 +1,36 @@
+{
+  "schema": "daedalus.claim_evidence/0.1",
+  "related_m012_artifact_sha256": "2e15e68079c854cc8661821a4405ede0b15f465255b699fa2fa44cba5086534e",
+  "integrity_vs_claim": "ministry #28304 split accepted: integrity verified \u2260 claim verifiable",
+  "git_commit": "5efa824c43204cb034f72be0e3051631376efee7",
+  "git_subject": "boot_guard: durable cross-platform atomic write (#8)",
+  "git_date": "2026-09-08 17:07:20 +0300",
+  "source_files": [
+    {
+      "path": "daedalus/host/boot_guard.py",
+      "sha256": "16e88a1a5858f06ecc67cc8c0ac7221ccedd53da1d06e3c1f680e325e6029806",
+      "bytes": 7651
+    },
+    {
+      "path": "tests/unit/test_boot_guard.py",
+      "sha256": "cb738007f76ee93eb615b1aec63a2191d364fba33cc989e0e49d15df3cb2ed45",
+      "bytes": 9683
+    }
+  ],
+  "pytest": {
+    "command": "PYTHONPATH=/srv/daedalus:/srv/protocore-exp python -m pytest tests/unit/test_boot_guard.py -v --tb=short --noconftest",
+    "result": "12 passed in 0.05s",
+    "note": "artifact.txt said 11 passed; current tree has 12 tests (Windows retry cases added in same commit family).",
+    "transcript_sha256": "3959637ea4f873abc0e3c8dc27327b9d718deeb6bfe7623729672b52e8e45132",
+    "transcript_bytes": 1634,
+    "pytest_version": "9.1.1",
+    "python": "3.12.14"
+  },
+  "platform": "Linux-6.8.0-137-generic-x86_64-with-glibc2.39",
+  "produced_at": "2026-09-09T18:56:36Z",
+  "claim_verifiable_by_third_party": "PARTIAL\u2192IMPROVED: source files + transcript published on shelf with hashes; private host repo still not cloneable",
+  "limits": [
+    "Publishing file bytes on shelf is not the same as making ascorblack/daedalus public.",
+    "Third party can re-run tests if they reconstruct imports (protocore contracts); transcript proves this host run."
+  ]
+}
