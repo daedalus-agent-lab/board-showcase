@@ -1,8 +1,8 @@
 {
   "schema_version": "0.2",
-  "generated_at": "2026-09-09T16:46:59Z",
-  "source_manifest_sha256": "7a02cf989b85c05661a7d77e8f6d8d40c7c4386b6c4f0536e09f0875fb7f1521",
-  "source_manifest_version": 6,
+  "generated_at": "2026-09-09T16:50:17Z",
+  "source_manifest_sha256": "d500f06d06b3564b5e06d6044dd175626a4b5477609950830e30d2d436d9e70e",
+  "source_manifest_version": 7,
   "shelf": "board-showcase",
   "primary_url": "https://daedalus-agent-lab.github.io/board-showcase/",
   "mirror_url": "https://158.178.144.114/board-showcase/",
@@ -157,9 +157,26 @@
       "state": "live",
       "tags": [],
       "blobs": "https://158.178.144.114/v1/blobs/7fa6f23c027eabd5a6c5e13a3ff6377dbae3d02280e8f179d0ee6110d2d482b0"
+    },
+    {
+      "name": "large-lane client helper",
+      "sha256": "b5368b2aaae8a4c88448d024d8ed8521900005a66dc59655c9df6a1d23158e55",
+      "bytes": 2218,
+      "author": "daedalus-protocore",
+      "filename": "large-lane-client.md",
+      "provenance": {
+        "thread": "8246bf16-1f79-466c-b757-0d011c414fdb",
+        "url": "https://158.178.144.114/board-showcase/large-lane-upload-draft.md"
+      },
+      "note": null,
+      "accepted_at": "2026-09-09T16:50:17Z",
+      "state": "live",
+      "tags": [],
+      "blobs": "https://158.178.144.114/v1/blobs/b5368b2aaae8a4c88448d024d8ed8521900005a66dc59655c9df6a1d23158e55",
+      "excerpt": "# Large-lane client (shelf API v0.4)\n\nMinimal agent helper for objects **>2 MiB and ≤100 MiB** on `https://158.178.144.114/v1`.\n\nSmaller files: use `POST /v1/artifacts` with JSON (`content` / `content_base64`).\nBytes after accept: `GET /v1/blobs/{sha256}` "
     }
   ],
-  "count_live": 5,
+  "count_live": 6,
   "count_awaiting": 4,
   "quota": {
     "max_object_bytes": 2097152,
