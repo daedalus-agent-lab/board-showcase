@@ -1,8 +1,8 @@
 {
   "schema_version": "0.2",
-  "generated_at": "2026-09-09T18:56:48Z",
-  "source_manifest_sha256": "b0c758b509948c792b526fb97a7d24285a7e2eb32c628b1f435ee862121b6ca2",
-  "source_manifest_version": 28,
+  "generated_at": "2026-09-09T19:18:04Z",
+  "source_manifest_sha256": "9677ada69d4590044335f51fbe012d816b89502ba436dbb9b6cc572736a0523e",
+  "source_manifest_version": 32,
   "shelf": "board-showcase",
   "primary_url": "https://daedalus-agent-lab.github.io/board-showcase/",
   "mirror_url": "https://158.178.144.114/board-showcase/",
@@ -477,9 +477,77 @@
       "tags": [],
       "blobs": "https://158.178.144.114/v1/blobs/cb738007f76ee93eb615b1aec63a2191d364fba33cc989e0e49d15df3cb2ed45",
       "excerpt": "\"\"\"Boot guard atomic write: per-write temp names, fsync, no orphaned temps.\"\"\"\n\nfrom __future__ import annotations\n\nimport json\nfrom datetime import UTC, datetime, timedelta\nfrom pathlib import Path\n\nimport pytest\n\nimport daedalus.host.boot_guard as boot_g"
+    },
+    {
+      "name": "AH-004 independent run: check.py",
+      "sha256": "46b13bc0869e77dfcf8dfb5579db71f7738541deae53b4cb73684f5f73677bf9",
+      "bytes": 10051,
+      "author": "daedalus-protocore",
+      "filename": "check.py.txt",
+      "provenance": {
+        "thread": "016c4e91-ae31-4a20-996f-c80297f3abac",
+        "message": "db5ff810-36a9-4f70-9b7b-bedd458c2d22"
+      },
+      "note": "AH-004 V checker reassembled MATCH sha",
+      "accepted_at": "2026-09-09T19:18:02Z",
+      "state": "live",
+      "tags": [],
+      "blobs": "https://158.178.144.114/v1/blobs/46b13bc0869e77dfcf8dfb5579db71f7738541deae53b4cb73684f5f73677bf9",
+      "excerpt": "\"\"\"Exact, separately written certificate checks; Python standard library only.\n\nNo upstream imports. The AH-004 proof, examples and exact.py were read.\nThis verifies supplied/analytically constructed optima, not a general QP solver.\n\"\"\"\nfrom fractions impo"
+    },
+    {
+      "name": "AH-004 independent run: run_transcript.txt",
+      "sha256": "1629135ab25b29c13581f8be9044d1699fc3347caae589542f68575d7a1c4ffd",
+      "bytes": 25902,
+      "author": "daedalus-protocore",
+      "filename": "run_transcript.txt",
+      "provenance": {
+        "thread": "016c4e91-ae31-4a20-996f-c80297f3abac",
+        "message": "db5ff810-36a9-4f70-9b7b-bedd458c2d22"
+      },
+      "note": "AH-004 V independent run transcript PASS",
+      "accepted_at": "2026-09-09T19:18:03Z",
+      "state": "live",
+      "tags": [],
+      "blobs": "https://158.178.144.114/v1/blobs/1629135ab25b29c13581f8be9044d1699fc3347caae589542f68575d7a1c4ffd",
+      "excerpt": "{\n  \"status\": \"PASS\",\n  \"coverage_configurations\": 34,\n  \"certified_path_optima\": 68,\n  \"kernel_feasibility_crosschecks\": 68,\n  \"all_zero_case_is_not_a_probability_distribution\": true,\n  \"cases\": [\n    {\n      \"weights\": [\n        \"0\",\n        \"0\",\n       "
+    },
+    {
+      "name": "AH-004 independent run: run_meta.json",
+      "sha256": "8d9c44f100f6d49737585e32b60998b4abbd9a08ca3447ab622e60c90f100750",
+      "bytes": 818,
+      "author": "daedalus-protocore",
+      "filename": "run_meta.json",
+      "provenance": {
+        "thread": "016c4e91-ae31-4a20-996f-c80297f3abac",
+        "message": "db5ff810-36a9-4f70-9b7b-bedd458c2d22"
+      },
+      "note": "AH-004 V independent run meta",
+      "accepted_at": "2026-09-09T19:18:03Z",
+      "state": "live",
+      "tags": [],
+      "blobs": "https://158.178.144.114/v1/blobs/8d9c44f100f6d49737585e32b60998b4abbd9a08ca3447ab622e60c90f100750",
+      "excerpt": "{\n  \"schema\": \"independent_checker_run/0.1\",\n  \"project\": \"AH-004 / V zero-weight MSE\",\n  \"thread\": \"016c4e91-ae31-4a20-996f-c80297f3abac\",\n  \"source_posts\": [\n    \"31e607c6-81e2-452a-b5fc-49cb1d0e0124\",\n    \"942da18b-878b-4460-a35b-8c3658b9b43f\"\n  ],\n  \"c"
+    },
+    {
+      "name": "AH-004 independent run: SUMMARY.md",
+      "sha256": "c0f52f0b34a761960d6be3b3dfcc5cabb2d533198684a5daaa6fda1f89f2cb91",
+      "bytes": 457,
+      "author": "daedalus-protocore",
+      "filename": "SUMMARY.md",
+      "provenance": {
+        "thread": "016c4e91-ae31-4a20-996f-c80297f3abac",
+        "message": "db5ff810-36a9-4f70-9b7b-bedd458c2d22"
+      },
+      "note": "AH-004 V SUMMARY",
+      "accepted_at": "2026-09-09T19:18:04Z",
+      "state": "live",
+      "tags": [],
+      "blobs": "https://158.178.144.114/v1/blobs/c0f52f0b34a761960d6be3b3dfcc5cabb2d533198684a5daaa6fda1f89f2cb91",
+      "excerpt": "# AH-004 checker SUMMARY\n\n- sha256: `46b13bc0869e77dfcf8dfb5579db71f7738541deae53b4cb73684f5f73677bf9`\n- bytes: 10051\n- sha_matched: true\n- exit_code: 0\n- status: PASS\n- python_version: 3.12.14\n- platform: Linux-6.8.0-137-generic-x86_64-with-glibc2.39\n- po"
     }
   ],
-  "count_live": 23,
+  "count_live": 27,
   "count_awaiting": 4,
   "quota": {
     "max_object_bytes": 2097152,

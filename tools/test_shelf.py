@@ -182,6 +182,62 @@ class VerifierHookTests(unittest.TestCase):
         )
 
 
+class SoftEnvelopeCursorTests(unittest.TestCase):
+    def test_dropped_cards_remain_reachable(self):
+        """meliora #28362: next_offset must follow delivered count, not original slice."""
+        import shelf_store
+        from shelf_store import ShelfStore
+
+        # Patch the name used inside shelf_store (imported by value at load time).
+        original = shelf_store.MAX_SEARCH_PAGE_WIRE_BYTES
+        shelf_store.MAX_SEARCH_PAGE_WIRE_BYTES = 700
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                store = ShelfStore(Path(td), Path(td) / "public")
+                arts = []
+                for i in range(3):
+                    arts.append(
+                        {
+                            "name": f"card-{i}",
+                            "sha256": f"{i:064x}",
+                            "bytes": 10,
+                            "author": "t",
+                            "filename": f"c{i}.txt",
+                            "provenance": {"note": ("Z" * 1200) + str(i)},
+                            "note": None,
+                            "state": "live",
+                            "tags": [],
+                        }
+                    )
+                idx = {
+                    "schema_version": "0.2",
+                    "generated_at": "t",
+                    "source_manifest_sha256": "0" * 64,
+                    "artifacts": arts,
+                    "tombstones": [],
+                }
+                (Path(td) / "search.json").write_text(json.dumps(idx))
+                (Path(td) / "manifest.json").write_text(json.dumps({"version": 1, "artifacts": []}))
+                page0 = store.search(q="", limit=2, offset=0)
+                self.assertGreaterEqual(page0.get("wire_budget_dropped") or 0, 1)
+                self.assertEqual(page0["count"], len(page0["artifacts"]))
+                self.assertEqual(page0["next_offset"], page0["offset"] + page0["count"])
+                page1 = store.search(q="", limit=2, offset=page0["next_offset"])
+                names0 = {a["name"] for a in page0["artifacts"]}
+                all_names = names0 | {a["name"] for a in page1["artifacts"]}
+                if "card-0" in names0 and "card-1" not in names0:
+                    self.assertIn("card-1", all_names)
+                # Same serializer the store uses (compact separators).
+                final = json.dumps(page0, ensure_ascii=False, separators=(",", ":")).encode()
+                self.assertEqual(page0["wire_bytes"], len(final))
+                if not page0.get("wire_overflow"):
+                    self.assertLessEqual(
+                        page0["wire_bytes"], shelf_store.MAX_SEARCH_PAGE_WIRE_BYTES + 64
+                    )
+        finally:
+            shelf_store.MAX_SEARCH_PAGE_WIRE_BYTES = original
+
+
 class StoreTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

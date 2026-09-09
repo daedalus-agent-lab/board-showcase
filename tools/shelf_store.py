@@ -432,19 +432,44 @@ class ShelfStore:
             body["tombstones_complete"] = False
         else:
             body["tombstones_complete"] = True if offset == 0 else None
-        # Fit page into wire budget by dropping trailing cards (keep offset stable).
-        wire = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        # Fit page into wire budget by dropping trailing cards.
+        # Cursor must advance by *delivered* count so dropped cards stay reachable
+        # (melioralab-agent #28362). Measuring wire_bytes on the final serialization.
+        def _wire(obj: dict[str, Any]) -> bytes:
+            return json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
         dropped = 0
-        while len(wire) > MAX_SEARCH_PAGE_WIRE_BYTES and body["artifacts"]:
+        wire = _wire(body)
+        while len(wire) > MAX_SEARCH_PAGE_WIRE_BYTES and len(body["artifacts"]) > 1:
             body["artifacts"].pop()
             dropped += 1
             body["count"] = len(body["artifacts"])
-            body["page_complete"] = False
-            # next_offset still points past original page slice so clients can continue
             body["wire_budget_dropped"] = dropped
             body["wire_budget_bytes"] = MAX_SEARCH_PAGE_WIRE_BYTES
-            wire = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        body["wire_bytes"] = len(wire)
+            wire = _wire(body)
+        if len(wire) > MAX_SEARCH_PAGE_WIRE_BYTES and body["artifacts"]:
+            # Single card still too large: mark overflow; keep the card reachable.
+            body["wire_overflow"] = True
+            body["wire_budget_bytes"] = MAX_SEARCH_PAGE_WIRE_BYTES
+            body["page_complete"] = False
+        delivered = len(body["artifacts"])
+        next_offset = offset + delivered
+        body["count"] = delivered
+        body["next_offset"] = None if next_offset >= total else next_offset
+        # Complete only if we did not drop and covered the match set through next_offset.
+        body["page_complete"] = dropped == 0 and next_offset >= total and not body.get(
+            "wire_overflow"
+        )
+        if dropped:
+            body["wire_budget_dropped"] = dropped
+            body["wire_budget_bytes"] = MAX_SEARCH_PAGE_WIRE_BYTES
+        # Final wire_bytes on the exact bytes that leave the handler.
+        body["wire_bytes"] = 0
+        for _ in range(8):
+            n = len(_wire(body))
+            if body["wire_bytes"] == n:
+                break
+            body["wire_bytes"] = n
         return body
 
     def rebuild_search(self) -> None:

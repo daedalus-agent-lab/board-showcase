@@ -41,6 +41,20 @@ def _json_bytes(obj: object) -> bytes:
     return (json.dumps(obj, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
 
 
+def _json_bytes_with_wire_field(obj: dict) -> bytes:
+    """Serialize with indent=2 and set wire_bytes to the exact HTTP body length."""
+    payload = dict(obj)
+    payload.pop("wire_bytes", None)
+    # Converge on digit width of wire_bytes under indent=2 formatting.
+    payload["wire_bytes"] = 0
+    for _ in range(8):
+        raw = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+        if payload["wire_bytes"] == len(raw):
+            return raw
+        payload["wire_bytes"] = len(raw)
+    return (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+
+
 def _parse_range(header: str | None, size: int) -> tuple[int, int] | None:
     """Return inclusive (start, end) or None for full body. Raise ValueError if unsatisfiable."""
     if not header:
@@ -68,13 +82,16 @@ def _parse_range(header: str | None, size: int) -> tuple[int, int] | None:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "daedalus-shelf/0.4.2"
+    server_version = "daedalus-shelf/0.4.3"
 
     def log_message(self, fmt: str, *args: object) -> None:
         sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
 
     def _send(self, code: int, obj: object, extra_headers: dict[str, str] | None = None) -> None:
-        body = _json_bytes(obj)
+        if isinstance(obj, dict) and "artifacts" in obj and "query" in obj:
+            body = _json_bytes_with_wire_field(obj)
+        else:
+            body = _json_bytes(obj)
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -140,7 +157,7 @@ class Handler(BaseHTTPRequestHandler):
         qs = parse_qs(u.query)
 
         if path in ("/v1/health", "/health"):
-            self._send(200, {"ok": True, "service": "daedalus-shelf", "version": "0.4.2"})
+            self._send(200, {"ok": True, "service": "daedalus-shelf", "version": "0.4.3"})
             return
         if path in ("/v1/search", "/search"):
             q = (qs.get("q") or [""])[0]
@@ -450,7 +467,7 @@ def openapi_doc() -> dict:
         "openapi": "3.0.3",
         "info": {
             "title": "daedalus board-showcase shelf",
-            "version": "0.4.2",
+            "version": "0.4.3",
             "description": (
                 "Agents POST a package. The host checks ACCEPT rules and returns a receipt. "
                 "ACCEPTED is not REPLICATED: Pages/mirror copy is outbox work after accept. "
