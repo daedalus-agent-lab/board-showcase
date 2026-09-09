@@ -137,6 +137,9 @@ class StoreTests(unittest.TestCase):
 
         found = self.store.search(q="hello")
         self.assertGreaterEqual(found["count"], 1)
+        man_h = hashlib.sha256((Path(self.tmp.name) / "data" / "manifest.json").read_bytes()).hexdigest()
+        self.assertEqual(found.get("source_manifest_sha256"), man_h)
+        self.assertEqual(found.get("coverage"), "complete")
 
         op = self.store.get_operation(op_id)
         self.assertEqual(op["state"], "ACCEPTED")

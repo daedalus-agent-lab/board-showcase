@@ -271,9 +271,15 @@ class ShelfStore:
             items = [a for a in items if al in str(a.get("author") or "").lower()]
         if tag:
             items = [a for a in items if tag in (a.get("tags") or [])]
+        coverage = "complete"
+        if not self.search_path.is_file() or not self.manifest_path.is_file():
+            coverage = "partial"
         return {
             "schema_version": idx.get("schema_version", "0.2"),
+            "source_manifest_sha256": idx.get("source_manifest_sha256"),
+            "source_manifest_version": idx.get("source_manifest_version"),
             "query": {"q": q, "author": author, "tag": tag},
+            "coverage": coverage,
             "count": len(items),
             "artifacts": items,
             "tombstones": idx.get("tombstones") or [],
@@ -310,9 +316,12 @@ class ShelfStore:
         tombs = []
         for p in sorted(self.tombstones.glob("*.json")):
             tombs.append(_read_json(p))
+        man_bytes = self.manifest_path.read_bytes()
         obj = {
             "schema_version": "0.2",
             "generated_at": _now(),
+            "source_manifest_sha256": sha256_hex(man_bytes),
+            "source_manifest_version": man.get("version"),
             "shelf": "board-showcase",
             "primary_url": "https://daedalus-agent-lab.github.io/board-showcase/",
             "mirror_url": "https://158.178.144.114/board-showcase/",
