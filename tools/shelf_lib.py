@@ -21,6 +21,12 @@ STAGING_TTL_SECONDS = 24 * 3600  # 24h upload staging
 DEFAULT_PART_SIZE = 1024 * 1024  # 1 MiB
 MIN_PART_SIZE = 256 * 1024
 MAX_PART_SIZE = 8 * 1024 * 1024
+# Search-card JSON budget (meliora/just-nik): object-byte caps do not bound metadata.
+MAX_NAME_CHARS = 200
+MAX_AUTHOR_CHARS = 80
+MAX_NOTE_CHARS = 512
+MAX_CONSENT_CHARS = 1024
+MAX_PROVENANCE_JSON_BYTES = 4096  # sorted canonical JSON of provenance object
 FILENAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,120}$")
 ALLOWED_EXT = {".md", ".json", ".svg", ".txt", ".html"}
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -124,6 +130,7 @@ def _validate_common_meta(
     max_bytes: int,
     content: bytes | None = None,
     verify_hash_against_content: bool = True,
+    note: str | None = None,
 ) -> CheckResult:
     """Shared ACCEPT metadata checks for small and large lanes.
 
@@ -195,14 +202,42 @@ def _validate_common_meta(
                 CheckFailure("type", f"extension {ext or '(none)'} not in {sorted(ALLOWED_EXT)}")
             )
 
-    if not name or not str(name).strip():
+    name_s = str(name or "").strip()
+    if not name_s:
         failures.append(CheckFailure("name", "name is required"))
-    if not author or not str(author).strip():
+    elif len(name_s) > MAX_NAME_CHARS:
+        failures.append(
+            CheckFailure(
+                "name",
+                f"name length {len(name_s)} exceeds MAX_NAME_CHARS={MAX_NAME_CHARS}",
+            )
+        )
+
+    author_s = str(author or "").strip()
+    if not author_s:
         failures.append(CheckFailure("author", "author is required"))
+    elif len(author_s) > MAX_AUTHOR_CHARS:
+        failures.append(
+            CheckFailure(
+                "author",
+                f"author length {len(author_s)} exceeds MAX_AUTHOR_CHARS={MAX_AUTHOR_CHARS}",
+            )
+        )
+
+    note_s = str(note or "").strip() if note is not None else ""
+    if len(note_s) > MAX_NOTE_CHARS:
+        failures.append(
+            CheckFailure(
+                "note",
+                f"note length {len(note_s)} exceeds MAX_NOTE_CHARS={MAX_NOTE_CHARS}",
+            )
+        )
 
     if not isinstance(provenance, dict) or not provenance:
         failures.append(CheckFailure("provenance", "provenance object is required"))
+        prov_obj: dict[str, Any] = {}
     else:
+        prov_obj = provenance
         cites = any(
             provenance.get(k)
             for k in ("thread", "message", "repo", "commit", "meatproxy", "url")
@@ -214,6 +249,17 @@ def _validate_common_meta(
                     "need at least one of thread, message, repo, commit, meatproxy, url",
                 )
             )
+        prov_wire = json.dumps(
+            provenance, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
+        if len(prov_wire) > MAX_PROVENANCE_JSON_BYTES:
+            failures.append(
+                CheckFailure(
+                    "provenance",
+                    f"provenance JSON {len(prov_wire)} bytes exceeds "
+                    f"MAX_PROVENANCE_JSON_BYTES={MAX_PROVENANCE_JSON_BYTES}",
+                )
+            )
 
     consent_s = (consent or "").strip()
     if len(consent_s) < 8:
@@ -221,6 +267,13 @@ def _validate_common_meta(
             CheckFailure(
                 "consent",
                 "explicit hosting consent required (short sentence in the package)",
+            )
+        )
+    elif len(consent_s) > MAX_CONSENT_CHARS:
+        failures.append(
+            CheckFailure(
+                "consent",
+                f"consent length {len(consent_s)} exceeds MAX_CONSENT_CHARS={MAX_CONSENT_CHARS}",
             )
         )
 
@@ -240,19 +293,20 @@ def _validate_common_meta(
         return _fail(*failures)
 
     snap = {
-        "author": str(author).strip(),
-        "name": str(name).strip(),
+        "author": author_s,
+        "name": name_s,
         "filename": filename,
-        "provenance": provenance,
+        "provenance": prov_obj,
         "consent": consent_s,
         "principal": principal,
+        "note": note_s or None,
     }
     fp = fingerprint_of(
         principal=principal,
         sha256=digest if content is not None else declared,
         consent=consent_s,
-        provenance=provenance,
-        name=str(name).strip(),
+        provenance=prov_obj,
+        name=name_s,
         filename=filename,
     )
     return CheckResult(
@@ -279,6 +333,7 @@ def check_package(
     shelf_live_bytes: int,
     shelf_live_count: int,
     idempotency_key: str,
+    note: str | None = None,
 ) -> CheckResult:
     """Default JSON POST lane: 1..2 MiB with body present."""
     return _validate_common_meta(
@@ -297,6 +352,7 @@ def check_package(
         min_bytes=1,
         max_bytes=MAX_OBJECT_BYTES,
         verify_hash_against_content=True,
+        note=note,
     )
 
 
@@ -315,6 +371,7 @@ def check_upload_init(
     idempotency_key: str,
     part_size: int | None = None,
     reserved_bytes: int = 0,
+    note: str | None = None,
 ) -> CheckResult:
     """Large-lane init: metadata only, size must be in (2 MiB, 100 MiB].
 
@@ -338,6 +395,7 @@ def check_upload_init(
         min_bytes=min_large,
         max_bytes=MAX_OBJECT_BYTES_LARGE,
         verify_hash_against_content=False,
+        note=note,
     )
     if not result.ok:
         return result

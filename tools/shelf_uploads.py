@@ -219,6 +219,11 @@ class UploadStore:
             )
             reserved = self.reserved_bytes()
 
+            note = (
+                str(meta_body["note"])
+                if meta_body.get("note") is not None
+                else None
+            )
             check = check_upload_init(
                 declared_sha256=declared_sha,
                 declared_bytes=declared_bytes,
@@ -233,6 +238,7 @@ class UploadStore:
                 idempotency_key=idempotency_key,
                 part_size=part_size,
                 reserved_bytes=reserved,
+                note=note,
             )
             if not check.ok:
                 return {

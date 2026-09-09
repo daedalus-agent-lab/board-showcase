@@ -518,6 +518,8 @@ def _artifact_row(
         "mirror": f"https://158.178.144.114/board-showcase/{check.filename}",
         "fiction": False,
     }
+    if check.snapshot.get("note"):
+        row["note"] = check.snapshot["note"]
     if expires_at:
         row["expires_at"] = expires_at
     return row

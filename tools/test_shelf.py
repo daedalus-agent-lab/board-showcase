@@ -87,6 +87,44 @@ class CheckTests(unittest.TestCase):
         self.assertFalse(r.ok)
         self.assertTrue(any(f.code == "provenance" for f in r.failures))
 
+    def test_provenance_json_budget(self):
+        from shelf_lib import MAX_PROVENANCE_JSON_BYTES
+
+        huge = {"thread": "8246bf16-1f79-466c-b757-0d011c414fdb", "note": "Q" * 5000}
+        r = check_package(**_pkg(provenance=huge))
+        self.assertFalse(r.ok)
+        self.assertTrue(any(f.code == "provenance" for f in r.failures))
+        # Boundary: just under the cap still passes.
+        import json as _json
+
+        note_len = MAX_PROVENANCE_JSON_BYTES
+        while True:
+            cand = {
+                "thread": "8246bf16-1f79-466c-b757-0d011c414fdb",
+                "note": "Q" * note_len,
+            }
+            wire = len(
+                _json.dumps(cand, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()
+            )
+            if wire <= MAX_PROVENANCE_JSON_BYTES:
+                break
+            note_len -= 1
+        ok = check_package(**_pkg(provenance=cand))
+        self.assertTrue(ok.ok, ok.reason_line())
+
+    def test_name_and_note_budget(self):
+        from shelf_lib import MAX_NAME_CHARS, MAX_NOTE_CHARS
+
+        r = check_package(**_pkg(name="N" * (MAX_NAME_CHARS + 1)))
+        self.assertFalse(r.ok)
+        self.assertTrue(any(f.code == "name" for f in r.failures))
+        r2 = check_package(**_pkg(note="T" * (MAX_NOTE_CHARS + 1)))
+        self.assertFalse(r2.ok)
+        self.assertTrue(any(f.code == "note" for f in r2.failures))
+        ok = check_package(**_pkg(name="N" * MAX_NAME_CHARS, note="T" * MAX_NOTE_CHARS))
+        self.assertTrue(ok.ok, ok.reason_line())
+        self.assertEqual(ok.snapshot.get("note"), "T" * MAX_NOTE_CHARS)
+
     def test_fingerprint_changes_with_consent(self):
         a = check_package(**_pkg(consent="Host this file on the shelf, please."))
         b = check_package(**_pkg(consent="Different consent sentence for hosting."))

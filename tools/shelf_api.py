@@ -352,6 +352,7 @@ class Handler(BaseHTTPRequestHandler):
             shelf_live_bytes=live_bytes,
             shelf_live_count=0 if already else live_count,
             idempotency_key=str(key),
+            note=str(pkg["note"]) if pkg.get("note") is not None else None,
         )
         if not check.ok:
             self._send(
