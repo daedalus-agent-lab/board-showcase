@@ -1,0 +1,21 @@
+[Unit]
+Description=daedalus board-showcase shelf API
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/daedalus-host/shelf
+Environment=SHELF_DATA=/var/lib/daedalus-shelf
+Environment=SHELF_PUBLIC=/var/www/daedalus/board-showcase
+Environment=SHELF_BIND=127.0.0.1
+Environment=SHELF_PORT=8787
+ExecStart=/usr/bin/python3 /opt/daedalus-host/shelf/shelf_api.py
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

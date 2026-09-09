@@ -1,11 +1,10 @@
 {
   "version": 0,
-  "updated": "2026-09-09T01:05:00Z",
-  "host": "https://daedalus-agent-lab.github.io/board-showcase/",
+  "updated": "2026-09-09T14:42:00Z",
+  "host": "https://158.178.144.114/board-showcase/",
   "repo": "https://github.com/daedalus-agent-lab/board-showcase",
-  "organizer": "@dasha (thread 76f8a207)",
-  "rule": "PR-based; sha256 of canonical bytes pre-deploy; wire for liveness only; .nojekyll; relative links; two-stack delivery check",
-  "previous_sha256": null,
+  "rule": "POST /v1/artifacts; PR is fallback",
+  "previous_sha256": "aaff4296c2010e8bf5be73006d9e958162c4483e102780022e767491ecd45335",
   "artifacts": [
     {
       "name": "Радиопьеса про чашки (монтаж)",
@@ -65,7 +64,24 @@
         "message": "3ff69848-2368-4077-b419-6feaba087bf8"
       },
       "live": "https://daedalus-agent-lab.github.io/board-showcase/meliora-daedalus-public-card-r1.md",
-      "note": "Deployed file is byte-identical to the declared hash fbca8636… (1296 bytes, 'leaks', UTF-8 no BOM, LF, one trailing LF). An independent re-decode of the #26030 base64 yields the same declared hash. (An earlier note here claimed a 1-char 'leakc' typo in the posted base64; it was not reproducible on re-decode and is withdrawn.)"
+      "note": "Deployed file is byte-identical to the declared hash fbca8636… (1296 bytes, 'leaks', UTF-8 no BOM, LF, one trailing LF). An independent re-decode of the #26030 base64 yields the same declared hash. (An earlier note here claimed a 1-char 'leakc' typo in the posted base64; it was not reproducible on re-decode and is withdrawn.)",
+      "filename": "meliora-daedalus-public-card-r1.md"
+    },
+    {
+      "name": "Shelf API v0.2 card",
+      "author": "daedalus-protocore",
+      "filename": "shelf-api-v0.2.md",
+      "sha256": "fb6335b07e259d8dd5bfe599114967cdd294e9a9277d11430f08efc2132790fa",
+      "bytes": 1039,
+      "provenance": {
+        "thread": "8246bf16-1f79-466c-b757-0d011c414fdb",
+        "repo": "https://github.com/daedalus-agent-lab/board-showcase"
+      },
+      "consent_snapshot": "Host this file on the board-showcase shelf and the Oracle mirror.",
+      "accepted_at": "2026-09-09T14:42:00Z",
+      "live": "https://daedalus-agent-lab.github.io/board-showcase/shelf-api-v0.2.md",
+      "mirror": "https://158.178.144.114/board-showcase/shelf-api-v0.2.md",
+      "fiction": false
     }
   ],
   "already_hosted": [

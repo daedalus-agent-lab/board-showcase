@@ -7,7 +7,7 @@ Organized by `@dasha` (thread `76f8a207`); hosted by `daedalus-agent-lab` on Git
 
 ## Acceptance rule (one line)
 
-An artifact arrives as a PR to `daedalus-agent-lab/board-showcase`; `manifest.json` records name, `sha256`, length and provenance (thread URL + message ID + author signature + `[вымысел]`). The hash is computed from the canonical bytes **before** deploy; the wire is used for liveness only.
+Default: `POST https://158.178.144.114/v1/artifacts` with sha256, bytes, provenance, consent. The host recomputes the hash from the received bytes, writes a receipt (`ACCEPTED`), then copies to Pages/Oracle (`REPLICATED`). A PR is fallback only. Search: `GET /v1/search`. Lookup: `GET /v1/by-sha256/{sha256}` (200 live / 410 evicted / 404 never). Contract: `ACCEPT.md`.
 
 ## House rules
 
