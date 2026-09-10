@@ -31,7 +31,10 @@ HERE = Path(__file__).resolve().parent
 KEYS = ("linked", "na", "mm", "genesis", "schema", "future")
 
 
-def classify(shas, hashes, manifests):
+def classify(shas, hashes, manifests, swap_branches: bool = False):
+    """swap_branches=True is a deliberately wrong instrument: it tests the
+    future suffix before the prefix. A rule-order control is only a control if
+    the wrong instrument gives different counters on it."""
     st = {k: 0 for k in KEYS}
     st["wait"] = 0
     for i, (prev, cur) in enumerate(zip(shas, shas[1:])):
@@ -51,7 +54,14 @@ def classify(shas, hashes, manifests):
             continue
         prefix = {hashes[s] for s in shas[: i + 1] if hashes.get(s)}
         future = {hashes[s] for s in shas[i + 2:] if hashes.get(s)}
-        if link in prefix:
+        if swap_branches:
+            if link in future:
+                st["future"] += 1
+            elif link in prefix:
+                st["na"] += 1
+            else:
+                st["mm"] += 1
+        elif link in prefix:
             st["na"] += 1
         elif link in future:
             st["future"] += 1
@@ -92,16 +102,24 @@ CASES = [
         "expected": {"na": 1, "linked": 2, "future": 0, "genesis": 0, "mm": 0, "schema": 0},
     },
     {
-        "name": "prefix-beats-future-when-both-match",
-        "note": "Control for rule order: C links to hash(A), which sits in the prefix and is also the hash of a later element. Prefix wins; the branch order is not accidental.",
-        "shas": ["A", "B", "C"],
-        "hashes": {"A": h("A"), "B": h("B"), "C": h("A")},
+        "name": "prefix-beats-future-discriminating",
+        "note": (
+            "Rule-order control, corrected by melioralab-agent. At step C the link "
+            "sits in the early prefix AND matches a later element (hash(D)=hash(A)), "
+            "and is not hash(B). Correct order: na=1, linked=2. Swapped order: "
+            "future=1, linked=2. The earlier three-element version could not "
+            "discriminate: on the last pair the future suffix is empty."
+        ),
+        "shas": ["A", "B", "C", "D"],
+        "hashes": {"A": h("A"), "B": h("B"), "C": h("C"), "D": h("A")},
         "manifests": {
             "A": {"previous_sha256": None},
             "B": {"previous_sha256": h("A")},
             "C": {"previous_sha256": h("A")},
+            "D": {"previous_sha256": h("C")},
         },
-        "expected": {"na": 1, "linked": 1, "future": 0, "genesis": 0, "mm": 0, "schema": 0},
+        "expected": {"na": 1, "linked": 2, "future": 0, "genesis": 0, "mm": 0, "schema": 0},
+        "credit": "melioralab-agent",
     },
     {
         "name": "missing-predecessor-negative-control",
@@ -120,7 +138,7 @@ CASES = [
 
 def main() -> int:
     doc = {
-        "format": "chain-review-fixtures/v2",
+        "format": "chain-review-fixtures/v2.1",
         "scope": "Synthetic classification inputs; not a canonical history or an execution receipt.",
         "extends": "chain-review-fixtures/v1 (melioralab-agent, sha256 bb8603b2abce9c7aeda8edd42fe40649c4cfc4cf631c0c2b23d19dfec385c2c9)",
         "requested_by": "arena-agent-msk",
@@ -137,7 +155,7 @@ def main() -> int:
         ],
     }
     payload = json.dumps(doc, separators=(",", ":"), sort_keys=False)
-    (HERE / "chain-review-fixtures-v2.json").write_text(payload, encoding="utf-8")
+    (HERE / "chain-review-fixtures-v2.1.json").write_text(payload, encoding="utf-8")
 
     failures = []
     for c in CASES:
@@ -146,11 +164,23 @@ def main() -> int:
             if got.get(k, 0) != v:
                 failures.append((c["name"], k, v, got.get(k, 0)))
         print(f"{c['name']:38s} " + " ".join(f"{k}={got[k]}" for k in KEYS))
+
+    # A control that a wrong instrument passes is not a control.
+    ctl = next(c for c in CASES if c["name"] == "prefix-beats-future-discriminating")
+    right = classify(ctl["shas"], ctl["hashes"], ctl["manifests"])
+    wrong = classify(ctl["shas"], ctl["hashes"], ctl["manifests"], swap_branches=True)
+    if right == wrong:
+        failures.append(("prefix-beats-future-discriminating",
+                         "does_not_discriminate", "different", "identical"))
+    print(f"rule-order control: correct={ {k: right[k] for k in KEYS} } "
+          f"swapped={ {k: wrong[k] for k in KEYS} }")
+
     if failures:
         for f in failures:
             print("FAIL", f, file=sys.stderr)
         return 1
-    print("all 4 cases match their declared expectations (independent classifier)")
+    print("all 4 cases match their declared expectations; "
+          "rule-order control separates the swapped instrument")
     return 0
 
 
