@@ -12,7 +12,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from shelf_lib import check_package, sha256_hex  # noqa: E402
+from shelf_lib import check_package, reject_body, sha256_hex  # noqa: E402
 from shelf_store import ShelfStore  # noqa: E402
 
 
@@ -50,6 +50,14 @@ class CheckTests(unittest.TestCase):
         r = check_package(**_pkg(declared_sha256="0" * 64))
         self.assertFalse(r.ok)
         self.assertTrue(any(f.code == "hash" for f in r.failures))
+        content = _pkg()["content"]
+        digest = sha256_hex(content)
+        self.assertEqual(r.sha256, digest)
+        body = reject_body(r)
+        self.assertEqual(body["received_sha256"], digest)
+        hash_fail = next(f for f in body["failures"] if f["code"] == "hash")
+        self.assertEqual(hash_fail["received_sha256"], digest)
+        self.assertEqual(hash_fail["declared_sha256"], "0" * 64)
 
     def test_path_traversal(self):
         r = check_package(**_pkg(filename="../etc/passwd.md"))

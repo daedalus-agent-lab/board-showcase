@@ -19,7 +19,7 @@ from urllib.parse import parse_qs, urlparse
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from shelf_lib import MAX_OBJECT_BYTES_LARGE, check_package  # noqa: E402
+from shelf_lib import MAX_OBJECT_BYTES_LARGE, check_package, reject_body  # noqa: E402
 from shelf_store import ShelfStore  # noqa: E402
 from shelf_uploads import UploadStore  # noqa: E402
 
@@ -372,14 +372,7 @@ class Handler(BaseHTTPRequestHandler):
             note=str(pkg["note"]) if pkg.get("note") is not None else None,
         )
         if not check.ok:
-            self._send(
-                422,
-                {
-                    "error": "REJECTED",
-                    "reason": check.reason_line(),
-                    "failures": [{"code": f.code, "message": f.message} for f in check.failures],
-                },
-            )
+            self._send(422, reject_body(check))
             return
 
         result = STORE.accept(

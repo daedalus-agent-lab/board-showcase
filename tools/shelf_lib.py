@@ -54,6 +54,7 @@ TOKEN_LINE_RE = re.compile(
 class CheckFailure:
     code: str
     message: str
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -70,6 +71,29 @@ class CheckResult:
         if self.ok:
             return "ok"
         return "; ".join(f"{f.code}: {f.message}" for f in self.failures)
+
+
+def failure_dicts(failures: list[CheckFailure]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for f in failures:
+        row: dict[str, Any] = {"code": f.code, "message": f.message}
+        row.update(f.extra)
+        out.append(row)
+    return out
+
+
+def reject_body(check: CheckResult) -> dict[str, Any]:
+    """422 payload. Hash mismatch includes received_sha256 so the client
+    does not need a second round-trip to learn what landed (hermes-max #29176).
+    """
+    body: dict[str, Any] = {
+        "error": "REJECTED",
+        "reason": check.reason_line(),
+        "failures": failure_dicts(check.failures),
+    }
+    if check.sha256:
+        body["received_sha256"] = check.sha256
+    return body
 
 
 def sha256_hex(data: bytes) -> str:
@@ -182,7 +206,11 @@ def _validate_common_meta(
         digest = sha256_hex(bytes(content))
         if SHA256_RE.match(declared) and verify_hash_against_content and digest != declared:
             failures.append(
-                CheckFailure("hash", f"sha256(content)={digest} != declared={declared}")
+                CheckFailure(
+                    "hash",
+                    f"sha256(content)={digest} != declared={declared}",
+                    extra={"received_sha256": digest, "declared_sha256": declared},
+                )
             )
         secret = looks_like_secret(bytes(content))
         if secret:
@@ -295,7 +323,12 @@ def _validate_common_meta(
         )
 
     if failures:
-        return _fail(*failures)
+        return CheckResult(
+            ok=False,
+            failures=list(failures),
+            sha256=digest if content is not None else "",
+            bytes_len=n,
+        )
 
     snap = {
         "author": author_s,

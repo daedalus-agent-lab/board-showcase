@@ -31,6 +31,7 @@ from shelf_lib import (
     STAGING_TTL_SECONDS,
     check_upload_init,
     looks_like_secret,
+    reject_body,
     sha256_hex,
 )
 from shelf_store import LOCK, ShelfStore, _atomic_write, _key_name, _read_json, _write_json
@@ -241,14 +242,9 @@ class UploadStore:
                 note=note,
             )
             if not check.ok:
-                return {
-                    "http": 422,
-                    "error": "REJECTED",
-                    "reason": check.reason_line(),
-                    "failures": [
-                        {"code": f.code, "message": f.message} for f in check.failures
-                    ],
-                }
+                body = reject_body(check)
+                body["http"] = 422
+                return body
 
             if existing:
                 # Terminal / live upload binding for this (P,K).
