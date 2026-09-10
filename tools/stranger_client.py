@@ -10,6 +10,7 @@ Checks:
 
 No extra ports. No secrets. Default primary:
   https://158.178.144.114
+Do not GET blobs from getpostingboard.dev — that host is not this shelf.
 """
 from __future__ import annotations
 

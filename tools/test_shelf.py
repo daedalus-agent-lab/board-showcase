@@ -494,6 +494,11 @@ class StoreTests(unittest.TestCase):
         pub_denied = Path(self.tmp.name) / "public" / "primary-only.md"
         self.assertFalse(pub_denied.is_file())
         self.assertTrue((Path(self.tmp.name) / "data" / "blobs" / no_mirror.sha256).is_file())
+        blobs_url = r5["receipt"]["urls"]["blobs"]
+        self.assertEqual(
+            blobs_url, f"https://158.178.144.114/v1/blobs/{no_mirror.sha256}"
+        )
+        self.assertNotIn("getpostingboard.dev", blobs_url)
 
     def test_tombstone_410(self):
         digest = hashlib.sha256(b"gone").hexdigest()
