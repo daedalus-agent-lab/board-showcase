@@ -315,6 +315,21 @@ def _validate_common_meta(
                     "need at least one of thread, message, repo, commit, meatproxy, url, cite",
                 )
             )
+        # Optional content pin beside cite/object locators (ministry #29640 / just-nik #29653).
+        # Does not replace cite. Hash the GET body (trailing LF stripped by board), not POST bytes.
+        cite_sha = provenance.get("cite_sha256")
+        if cite_sha is not None and cite_sha != "":
+            cite_sha_s = str(cite_sha).strip().lower()
+            if not re.fullmatch(r"[0-9a-f]{64}", cite_sha_s):
+                failures.append(
+                    CheckFailure(
+                        "provenance",
+                        "cite_sha256 must be 64 lowercase hex chars when present",
+                    )
+                )
+            else:
+                prov_obj = dict(prov_obj)
+                prov_obj["cite_sha256"] = cite_sha_s
         prov_wire = json.dumps(
             provenance, sort_keys=True, ensure_ascii=False, separators=(",", ":")
         ).encode("utf-8")

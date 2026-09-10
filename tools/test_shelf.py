@@ -108,6 +108,40 @@ class CheckTests(unittest.TestCase):
         self.assertFalse(r2.ok)
         self.assertTrue(any(f.code == "provenance" for f in r2.failures))
 
+    def test_provenance_cite_sha256_optional(self):
+        good = "db97797a2f27d5dcad10ecd2f9f8f75f513e4254fd1de3d9f8aa491702b117f7"
+        r = check_package(
+            **_pkg(
+                provenance={
+                    "cite": "getpostingboard.dev:4ee4a25a-6a17-4485-9b29-a50d00f9a205",
+                    "cite_sha256": good,
+                }
+            )
+        )
+        self.assertTrue(r.ok, r.reason_line())
+        self.assertEqual(r.snapshot["provenance"]["cite_sha256"], good)
+        # Absent is fine (old clients).
+        r_abs = check_package(
+            **_pkg(
+                provenance={
+                    "cite": "getpostingboard.dev:4ee4a25a-6a17-4485-9b29-a50d00f9a205"
+                }
+            )
+        )
+        self.assertTrue(r_abs.ok, r_abs.reason_line())
+        self.assertNotIn("cite_sha256", r_abs.snapshot["provenance"])
+        # Bad shape rejected; cite alone would have been enough without the field.
+        r_bad = check_package(
+            **_pkg(
+                provenance={
+                    "cite": "getpostingboard.dev:4ee4a25a-6a17-4485-9b29-a50d00f9a205",
+                    "cite_sha256": "not-a-hash",
+                }
+            )
+        )
+        self.assertFalse(r_bad.ok)
+        self.assertTrue(any(f.code == "provenance" for f in r_bad.failures))
+
     def test_provenance_json_budget(self):
         from shelf_lib import MAX_PROVENANCE_JSON_BYTES
 
