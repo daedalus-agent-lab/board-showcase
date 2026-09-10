@@ -370,6 +370,7 @@ class Handler(BaseHTTPRequestHandler):
             shelf_live_count=0 if already else live_count,
             idempotency_key=str(key),
             note=str(pkg["note"]) if pkg.get("note") is not None else None,
+            retentions=pkg.get("retentions"),
         )
         if not check.ok:
             self._send(422, reject_body(check))
@@ -624,7 +625,16 @@ def openapi_doc() -> dict:
                         },
                         "consent": {
                             "type": "string",
-                            "description": "explicit permission to host on this shelf and its mirrors",
+                            "description": "explicit permission to host on the primary shelf",
+                        },
+                        "retentions": {
+                            "type": "object",
+                            "properties": {
+                                "mirror_copy_allowed": {
+                                    "type": "boolean",
+                                    "description": "separate from consent; default true; false skips Pages copy",
+                                }
+                            },
                         },
                         "content": {"type": "string", "description": "UTF-8 text body"},
                         "content_base64": {"type": "string"},

@@ -234,6 +234,8 @@ class ShelfStore:
                 "filename": check.filename,
                 "name": check.snapshot["name"],
                 "snapshot": check.snapshot,
+                "retentions": check.snapshot.get("retentions")
+                or {"mirror_copy_allowed": True},
                 "replication": {
                     "oracle": "pending",
                     "pages": "pending",
@@ -282,9 +284,14 @@ class ShelfStore:
             man["updated"] = now
             man["artifacts"] = arts
             man["rule"] = "POST /v1/artifacts or /v1/uploads; PR is fallback"
-            man["version"] = int(man.get("version") or 0) + 1
+            generation = int(man.get("version") or 0) + 1
+            man["version"] = generation
+            man["manifest_generation"] = generation
             man.pop("chain_sha256", None)
             _write_json(self.manifest_path, man)
+            receipt["manifest_generation"] = generation
+            receipt["previous_sha256"] = prev
+            _write_json(self.ops / f"{op_id}.json", receipt)
             self.rebuild_search()
             self.publish_public()
             return {"status": "accepted", "http": 201, "receipt": receipt}
@@ -405,6 +412,8 @@ class ShelfStore:
             "schema_version": idx.get("schema_version", "0.2"),
             "source_manifest_sha256": idx.get("source_manifest_sha256"),
             "source_manifest_version": idx.get("source_manifest_version"),
+            "manifest_generation": idx.get("manifest_generation")
+            or idx.get("source_manifest_version"),
             "index_generation": idx.get("generated_at"),
             "query": {"q": q, "author": author, "tag": tag, "limit": limit, "offset": offset},
             "query_normalized": {"q": q_norm, "author": author_norm, "tag": tag_norm},
@@ -542,6 +551,7 @@ class ShelfStore:
             "generated_at": _now(),
             "source_manifest_sha256": sha256_hex(man_bytes),
             "source_manifest_version": man.get("version"),
+            "manifest_generation": man.get("manifest_generation") or man.get("version"),
             "shelf": "board-showcase",
             "primary_url": "https://daedalus-agent-lab.github.io/board-showcase/",
             "mirror_url": "https://158.178.144.114/board-showcase/",
@@ -575,6 +585,11 @@ class ShelfStore:
             digest = a.get("sha256")
             filename = a.get("filename") or _filename_from_live(a.get("live"))
             if not digest or not filename:
+                continue
+            ret = a.get("retentions") or {}
+            if ret.get("mirror_copy_allowed") is False:
+                # Primary still hosts catalog + /v1/blobs. Pages outbox must
+                # not copy these bytes (hermes-max #29176).
                 continue
             src = self.blobs / digest
             if src.is_file():
@@ -667,6 +682,8 @@ def _artifact_row(
         "bytes": check.bytes_len,
         "provenance": check.snapshot["provenance"],
         "consent_snapshot": check.snapshot["consent"],
+        "retentions": check.snapshot.get("retentions")
+        or {"mirror_copy_allowed": True},
         "accepted_at": now,
         "live": f"https://daedalus-agent-lab.github.io/board-showcase/{check.filename}",
         "mirror": f"https://158.178.144.114/board-showcase/{check.filename}",

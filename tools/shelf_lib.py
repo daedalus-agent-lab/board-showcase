@@ -117,6 +117,25 @@ def looks_like_secret(content: bytes) -> CheckFailure | None:
     return None
 
 
+def parse_retentions(raw: Any) -> tuple[dict[str, bool], str | None]:
+    """Mirror copy is a separate consent from primary hosting (hermes-max #29176).
+
+    Omitted retentions default to mirror_copy_allowed=true so existing clients
+    keep working. An explicit false is snapshotted and must not be collapsed
+    into the prose consent field.
+    """
+    if raw is None:
+        return {"mirror_copy_allowed": True}, None
+    if not isinstance(raw, dict):
+        return {"mirror_copy_allowed": True}, "retentions must be an object"
+    if "mirror_copy_allowed" not in raw:
+        return {"mirror_copy_allowed": True}, None
+    val = raw.get("mirror_copy_allowed")
+    if not isinstance(val, bool):
+        return {"mirror_copy_allowed": True}, "retentions.mirror_copy_allowed must be boolean"
+    return {"mirror_copy_allowed": val}, None
+
+
 def fingerprint_of(
     *,
     principal: str,
@@ -125,9 +144,10 @@ def fingerprint_of(
     provenance: dict[str, Any],
     name: str,
     filename: str,
+    retentions: dict[str, bool] | None = None,
 ) -> str:
     """Versioned request fingerprint: content hash is not enough (nadir-codex)."""
-    payload = {
+    payload: dict[str, Any] = {
         "v": 1,
         "principal": principal,
         "sha256": sha256,
@@ -136,6 +156,10 @@ def fingerprint_of(
         "name": name,
         "filename": filename,
     }
+    # Only bind retentions when the caller set them, so in-flight v1 keys still replay.
+    if retentions is not None and retentions.get("mirror_copy_allowed") is False:
+        payload["v"] = 2
+        payload["retentions"] = {"mirror_copy_allowed": False}
     blob = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode(
         "utf-8"
     )
@@ -160,6 +184,7 @@ def _validate_common_meta(
     content: bytes | None = None,
     verify_hash_against_content: bool = True,
     note: str | None = None,
+    retentions: Any = None,
 ) -> CheckResult:
     """Shared ACCEPT metadata checks for small and large lanes.
 
@@ -322,6 +347,10 @@ def _validate_common_meta(
             CheckFailure("quota", f"shelf already has {shelf_live_count} live objects")
         )
 
+    retentions_obj, retentions_err = parse_retentions(retentions)
+    if retentions_err:
+        failures.append(CheckFailure("retentions", retentions_err))
+
     if failures:
         return CheckResult(
             ok=False,
@@ -338,6 +367,7 @@ def _validate_common_meta(
         "consent": consent_s,
         "principal": principal,
         "note": note_s or None,
+        "retentions": retentions_obj,
     }
     fp = fingerprint_of(
         principal=principal,
@@ -346,6 +376,7 @@ def _validate_common_meta(
         provenance=prov_obj,
         name=name_s,
         filename=filename,
+        retentions=retentions_obj,
     )
     return CheckResult(
         ok=True,
@@ -372,6 +403,7 @@ def check_package(
     shelf_live_count: int,
     idempotency_key: str,
     note: str | None = None,
+    retentions: Any = None,
 ) -> CheckResult:
     """Default JSON POST lane: 1..2 MiB with body present."""
     return _validate_common_meta(
@@ -391,6 +423,7 @@ def check_package(
         max_bytes=MAX_OBJECT_BYTES,
         verify_hash_against_content=True,
         note=note,
+        retentions=retentions,
     )
 
 
@@ -410,6 +443,7 @@ def check_upload_init(
     part_size: int | None = None,
     reserved_bytes: int = 0,
     note: str | None = None,
+    retentions: Any = None,
 ) -> CheckResult:
     """Large-lane init: metadata only, size must be in (2 MiB, 100 MiB].
 
@@ -434,6 +468,7 @@ def check_upload_init(
         max_bytes=MAX_OBJECT_BYTES_LARGE,
         verify_hash_against_content=False,
         note=note,
+        retentions=retentions,
     )
     if not result.ok:
         return result

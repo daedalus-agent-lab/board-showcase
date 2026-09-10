@@ -139,6 +139,17 @@ class CheckTests(unittest.TestCase):
         self.assertTrue(a.ok and b.ok)
         self.assertNotEqual(a.fingerprint, b.fingerprint)
 
+    def test_retentions_default_and_conflict(self):
+        a = check_package(**_pkg())
+        b = check_package(**_pkg(retentions={"mirror_copy_allowed": False}))
+        self.assertTrue(a.ok and b.ok, (a.reason_line(), b.reason_line()))
+        self.assertEqual(a.snapshot["retentions"]["mirror_copy_allowed"], True)
+        self.assertEqual(b.snapshot["retentions"]["mirror_copy_allowed"], False)
+        self.assertNotEqual(a.fingerprint, b.fingerprint)
+        bad = check_package(**_pkg(retentions={"mirror_copy_allowed": "yes"}))
+        self.assertFalse(bad.ok)
+        self.assertTrue(any(f.code == "retentions" for f in bad.failures))
+
     def test_search_card_provenance_truncated(self):
         from shelf_lib import MAX_SEARCH_PROVENANCE_JSON_BYTES
         from shelf_store import _search_card_view
@@ -346,6 +357,8 @@ class StoreTests(unittest.TestCase):
         )
         self.assertEqual(r1["http"], 201)
         self.assertEqual(r1["receipt"]["state"], "ACCEPTED")
+        self.assertEqual(r1["receipt"]["manifest_generation"], 1)
+        self.assertEqual(r1["receipt"]["retentions"]["mirror_copy_allowed"], True)
         op_id = r1["receipt"]["operation_id"]
 
         # replay
@@ -442,9 +455,32 @@ class StoreTests(unittest.TestCase):
             idempotency_key="test-idempotency-key-02",
         )
         self.assertEqual(r4["http"], 201)
+        self.assertEqual(r4["receipt"]["manifest_generation"], 3)
         after = json.loads((Path(self.tmp.name) / "data" / "manifest.json").read_text())
         self.assertEqual(after["previous_sha256"], before_h)
+        self.assertEqual(after["manifest_generation"], 3)
         self.assertNotEqual(after["previous_sha256"], hashlib.sha256((Path(self.tmp.name) / "data" / "manifest.json").read_bytes()).hexdigest())
+
+        no_mirror = check_package(
+            **_pkg(
+                content=b"# primary only\n",
+                filename="primary-only.md",
+                name="Primary only",
+                idempotency_key="test-idempotency-key-nomirror",
+                retentions={"mirror_copy_allowed": False},
+            )
+        )
+        r5 = self.store.accept(
+            content=b"# primary only\n",
+            check=no_mirror,
+            principal="tester-agent",
+            idempotency_key="test-idempotency-key-nomirror",
+        )
+        self.assertEqual(r5["http"], 201)
+        self.assertFalse(r5["receipt"]["retentions"]["mirror_copy_allowed"])
+        pub_denied = Path(self.tmp.name) / "public" / "primary-only.md"
+        self.assertFalse(pub_denied.is_file())
+        self.assertTrue((Path(self.tmp.name) / "data" / "blobs" / no_mirror.sha256).is_file())
 
     def test_tombstone_410(self):
         digest = hashlib.sha256(b"gone").hexdigest()

@@ -240,6 +240,7 @@ class UploadStore:
                 part_size=part_size,
                 reserved_bytes=reserved,
                 note=note,
+                retentions=meta_body.get("retentions"),
             )
             if not check.ok:
                 body = reject_body(check)
