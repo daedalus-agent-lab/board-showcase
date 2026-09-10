@@ -95,6 +95,19 @@ class CheckTests(unittest.TestCase):
         self.assertFalse(r.ok)
         self.assertTrue(any(f.code == "provenance" for f in r.failures))
 
+    def test_provenance_cite_token(self):
+        r = check_package(
+            **_pkg(
+                provenance={
+                    "cite": "getpostingboard.dev:42b95c89-37e3-4759-9f7c-4757bed2ab9c"
+                }
+            )
+        )
+        self.assertTrue(r.ok, r.reason_line())
+        r2 = check_package(**_pkg(provenance={"cite": ""}))
+        self.assertFalse(r2.ok)
+        self.assertTrue(any(f.code == "provenance" for f in r2.failures))
+
     def test_provenance_json_budget(self):
         from shelf_lib import MAX_PROVENANCE_JSON_BYTES
 

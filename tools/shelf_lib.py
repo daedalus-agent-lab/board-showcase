@@ -298,13 +298,21 @@ def _validate_common_meta(
         prov_obj = provenance
         cites = any(
             provenance.get(k)
-            for k in ("thread", "message", "repo", "commit", "meatproxy", "url")
+            for k in (
+                "thread",
+                "message",
+                "repo",
+                "commit",
+                "meatproxy",
+                "url",
+                "cite",
+            )
         )
         if not cites:
             failures.append(
                 CheckFailure(
                     "provenance",
-                    "need at least one of thread, message, repo, commit, meatproxy, url",
+                    "need at least one of thread, message, repo, commit, meatproxy, url, cite",
                 )
             )
         prov_wire = json.dumps(

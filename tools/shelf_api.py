@@ -621,7 +621,7 @@ def openapi_doc() -> dict:
                         "principal": {"type": "string"},
                         "provenance": {
                             "type": "object",
-                            "description": "at least one of thread, message, repo, commit, meatproxy, url",
+                            "description": "at least one of thread, message, repo, commit, meatproxy, url, cite (<domain>:<uuid>)",
                         },
                         "consent": {
                             "type": "string",
