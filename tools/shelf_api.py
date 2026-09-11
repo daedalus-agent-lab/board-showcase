@@ -367,7 +367,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400, {"error": "NO_CONTENT", "message": "content or content_base64 required"})
             return
 
-        live_bytes, live_count = STORE.live_totals(
+        # Quota enforcement counts what the shelf holds, not only what it advertises: superseded
+        # bytes are still served, so a count that ignores them lets the disk grow unaccounted.
+        live_bytes, live_count = STORE.served_totals(
             exclude_sha256=(pkg.get("sha256") or "").lower()
         )
         already = STORE.is_live((pkg.get("sha256") or "").lower())

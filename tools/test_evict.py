@@ -197,6 +197,70 @@ class EvictionTests(unittest.TestCase):
         self.assertEqual(self.store.orphan_totals(), (len(b"# old\n"), 1),
                          "reporting an orphan must not change the count")
 
+    # ---------------------------------------------------------------- the mirror is a projection
+
+    def test_publish_sweeps_a_file_no_live_row_claims(self):
+        """The mirror must be derivable from the catalog, so a copy whose name left the catalog
+        cannot outlive it — including one written by an older version of the publisher."""
+        self.accept("live.md", "# live\n", "key-live-000000001")
+        self.publish()
+        stale = self.public / "stale-from-an-older-publisher.md"
+        stale.write_text("# bytes nothing advertises\n")
+
+        swept = self.store.publish_public()
+
+        self.assertIn("stale-from-an-older-publisher.md", swept)
+        self.assertFalse(stale.exists())
+        self.assertTrue((self.public / "live.md").is_file(), "swept a name a live row claims")
+
+    def test_publish_keeps_the_files_it_generates_and_the_site_itself(self):
+        """The sweep must not eat the catalog it publishes, nor the Pages entry point."""
+        self.accept("keepme.md", "# kept\n", "key-keepme-0000001")
+        (self.public / "index.html").write_text("<html>board</html>")
+        (self.public / ".nojekyll").write_text("")
+        self.publish()
+
+        swept = self.store.publish_public()
+
+        self.assertEqual(swept, [], "the publisher swept its own output")
+        for name in ("index.html", ".nojekyll", "manifest.json", "search.json", "tombstones.json"):
+            self.assertTrue((self.public / name).exists(), f"{name} was swept")
+        published = json.loads((self.public / "published.json").read_text())
+        self.assertIn("index.html", published["keep"])
+        self.assertIn("keepme.md", published["files"])
+
+    def test_a_superseded_object_names_what_displaced_it(self):
+        """Replacement is not withdrawal, and the vocabulary must be able to say so."""
+        old = self.accept("same.md", "# old\n", "key-supersede-00001")
+        new = self.accept("same.md", "# new\n", "key-supersede-00002")
+        self.publish()
+
+        row = [a for a in self.store.load_manifest()["artifacts"] if a["sha256"] == new][0]
+        self.assertEqual(row["supersedes"]["sha256"], old)
+        self.assertEqual(row["supersedes"]["reason"], "filename_replaced")
+
+        code, body = self.store.lookup_sha256(old)
+        self.assertEqual(code, 200, "a superseded object is still served, not withdrawn")
+        self.assertEqual(body["state"], "orphan_blob")
+        self.assertEqual(body["superseded_by"]["superseded_by"], new)
+
+        index = json.loads((self.public / "tombstones.json").read_text())
+        self.assertEqual(index["superseded"][old]["superseded_by"], new)
+        self.assertNotIn(old, index["by_sha256"], "a replacement is not a withdrawal")
+
+    def test_the_quota_counts_what_the_shelf_holds_not_only_what_it_advertises(self):
+        """Orphan bytes are served, so they consume the resource the quota exists to bound."""
+        a = self.accept("same.md", "# old, 15 bytes\n", "key-served-0000001")
+        b = self.accept("same.md", "# new, 15 bytes\n", "key-served-0000002")
+        self.assertNotEqual(a, b)
+
+        served_b, served_n = self.store.served_totals()
+        live_b, live_n = self.store.live_totals()
+        self.assertEqual(live_n, 1)
+        self.assertEqual(served_n, 2, "the displaced object is still served and must be counted")
+        self.assertGreater(served_b, live_b)
+
+
     # ---------------------------------------------------------------- the record
 
     def test_tombstone_records_reason_and_time_and_manifest_drops_the_entry(self):

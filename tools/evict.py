@@ -107,16 +107,16 @@ def main() -> int:
     man["manifest_generation"] = int(man.get("manifest_generation") or 0) + 1
     _atomic_write(store.manifest_path, json.dumps(man, indent=2, sort_keys=True).encode())
     store.rebuild_search()
-    store.publish_public()
-    if public:
-        for name in mirror_removed:
-            p = Path(public) / name
-            if p.is_file():
-                p.unlink()
-
+    # publish_public() is now a projection of the catalog: it writes the live copies, the receipts,
+    # and sweeps files that no live row claims — so the explicit per-name deletion this tool used to
+    # do afterwards is redundant, and the sweep is reported rather than silent.
+    swept = store.publish_public()
     after_b, after_n = store.live_totals()
     print(f"live objects {before_n} -> {after_n}; live bytes {before_b} -> {after_b}")
     print(f"tombstones {len(list(store.tombstones.glob('*.json')))}; not found {missing}")
+    if swept:
+        print(f"mirror swept {len(swept)} stale file(s): {' '.join(swept[:5])}"
+              + (" …" if len(swept) > 5 else ""))
     return 0
 
 

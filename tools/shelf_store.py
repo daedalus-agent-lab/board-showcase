@@ -286,6 +286,17 @@ class ShelfStore:
             replaced = False
             for i, a in enumerate(arts):
                 if a.get("sha256") == check.sha256 or a.get("filename") == check.filename:
+                    # A replacement is not a withdrawal: the displaced object was not retracted, it
+                    # was moved aside by a newer one under the same name. Record who displaced it,
+                    # so the old digest stops being served with no account of why.
+                    old = a.get("sha256")
+                    if old and old != check.sha256:
+                        row["supersedes"] = {
+                            "sha256": old,
+                            "filename": a.get("filename"),
+                            "reason": "filename_replaced",
+                            "at": now,
+                        }
                     arts[i] = row
                     replaced = True
                     break
@@ -339,13 +350,25 @@ class ShelfStore:
                 "note": "JSON metadata only; raw bytes are GET /v1/blobs/{sha256}",
             }
         if blob is not None:
-            return 200, {
+            sup = None
+            for a in self.load_manifest().get("artifacts") or []:
+                s = a.get("supersedes") or {}
+                if s.get("sha256") == sha256:
+                    sup = {"superseded_by": a.get("sha256"), "filename": s.get("filename"),
+                           "reason": s.get("reason"), "at": s.get("at")}
+                    break
+            body = {
                 "state": "orphan_blob",
                 "sha256": sha256,
                 "bytes": len(blob),
                 "blobs": f"https://158.178.144.114/v1/blobs/{sha256}",
                 "note": "bytes staged, not in live manifest (GC candidate)",
             }
+            if sup:
+                body["superseded_by"] = sup
+                body["note"] = ("bytes retained; the name this object was published under is now "
+                                "served by a newer object — see superseded_by")
+            return 200, body
         return 404, {"state": "never", "sha256": sha256}
 
     def open_blob(self, sha256: str) -> tuple[int, dict[str, Any], Path | None]:
@@ -603,6 +626,7 @@ class ShelfStore:
         """
         by_sha: dict[str, Any] = {}
         by_name: dict[str, list] = {}
+        superseded: dict[str, Any] = {}
         for p in sorted(self.tombstones.glob("*.json")):
             t = _read_json(p)
             digest = t.get("sha256") or p.stem
@@ -612,28 +636,67 @@ class ShelfStore:
                 by_name.setdefault(name, []).append(t)
         for rows in by_name.values():
             rows.sort(key=lambda t: str(t.get("evicted_at") or ""), reverse=True)
+        for a in self.load_manifest().get("artifacts") or []:
+            sup = a.get("supersedes") or {}
+            old = sup.get("sha256")
+            if old:
+                # Not a withdrawal: the object is still served, under a name a newer object took
+                # over. A reader holding the old digest learns what displaced it.
+                superseded[old] = {"superseded_by": a.get("sha256"), "filename": sup.get("filename"),
+                                   "reason": sup.get("reason"), "at": sup.get("at")}
         return {
             "schema_version": "0.1",
             "generated_at": _now(),
             "shelf": "board-showcase",
-            "note": ("Withdrawal receipts. After a 404 on this mirror: an entry here means the object "
-                     "was published and later withdrawn; no entry means the name was never published."),
+            "note": ("Withdrawal and replacement receipts. After a 404 on this mirror: an entry in "
+                     "by_sha256/by_name means the object was published and later withdrawn; an entry "
+                     "in superseded means it was displaced by a newer object under the same name and "
+                     "its bytes are still served; no entry anywhere means the name was never "
+                     "published."),
             "by_sha256": by_sha,
             "by_name": by_name,
+            "superseded": superseded,
         }
 
-    def publish_public(self) -> None:
-        """Copy live blobs + catalog into the static web root (Oracle file_server)."""
+    def served_totals(self, exclude_sha256: str | None = None) -> tuple[int, int]:
+        """(bytes, count) of everything this shelf actually serves: live rows plus orphans.
+
+        The quota is enforced against what the shelf holds, not only what it advertises: the two
+        numbers differ by the superseded objects, and enforcing the smaller one lets the disk grow
+        while the counter stands still.
+        """
+        live_b, live_n = self.live_totals(exclude_sha256=exclude_sha256)
+        orphan_b, orphan_n = self.orphan_totals()
+        return live_b + orphan_b, live_n + orphan_n
+
+    def publish_public(self) -> list[str]:
+        """Write the mirror as a projection of the catalog, and return stale names removed.
+
+        The mirror is derived state: what it should contain is a function of the live rows, the
+        generated catalogs and a small keep list. Writing only the live files left the copy of a
+        superseded or evicted object behind, which a reader cannot tell from a live one. Sweeping
+        here means any later drift is corrected by the next publish rather than by a second fix in
+        the eviction path.
+        """
         if self.public_dir.resolve() == self.data_dir.resolve():
-            return
+            return []
         man = self.load_manifest()
         self.public_dir.mkdir(parents=True, exist_ok=True)
+        generated = ("manifest.json", "search.json", "tombstones.json", "published.json")
+        keep = set(generated)
+        keep_file = self.data_dir / "mirror_keep.json"
+        if keep_file.is_file():
+            keep |= {str(n) for n in (_read_json(keep_file).get("keep") or [])}
+        else:
+            # Files the site itself owns: not artifacts, and not ours to delete.
+            keep |= {"index.html", ".nojekyll"}
         _atomic_write(self.public_dir / "manifest.json", self.manifest_path.read_bytes())
         _atomic_write(self.public_dir / "search.json", self.search_path.read_bytes())
         # The mirror's own withdrawal receipt: without it a 404 states only that the bytes are not
         # there, and cannot tell a reader whether the name was withdrawn or never existed.
         _atomic_write(self.public_dir / "tombstones.json",
                       json.dumps(self.tombstone_index(), indent=2, sort_keys=True).encode())
+        wrote = set(generated)
         for a in man.get("artifacts") or []:
             digest = a.get("sha256")
             filename = a.get("filename") or _filename_from_live(a.get("live"))
@@ -647,6 +710,19 @@ class ShelfStore:
             src = self.blobs / digest
             if src.is_file():
                 _atomic_write(self.public_dir / filename, src.read_bytes(), mode=0o644)
+                wrote.add(filename)
+        removed = []
+        for p in sorted(self.public_dir.iterdir()):
+            if not p.is_file() or p.name in wrote or p.name in keep:
+                continue
+            removed.append(p.name)
+            p.unlink()
+        _atomic_write(
+            self.public_dir / "published.json",
+            json.dumps({"generated_at": _now(), "files": sorted(wrote), "keep": sorted(keep),
+                        "removed_stale": removed}, indent=2, sort_keys=True).encode(),
+        )
+        return removed
 
     def mark_replicated(self, op_id: str, origin: str, observed: dict[str, Any]) -> None:
         with LOCK:
