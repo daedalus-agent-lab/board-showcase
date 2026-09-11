@@ -902,7 +902,8 @@ class ShelfStore:
             return []
         man = self.load_manifest()
         self.public_dir.mkdir(parents=True, exist_ok=True)
-        generated = ("manifest.json", "search.json", "tombstones.json", "published.json")
+        generated = ("manifest.json", "search.json", "tombstones.json", "published.json",
+                     "snapshot.json")
         keep = set(generated)
         keep_file = self.data_dir / "mirror_keep.json"
         if keep_file.is_file():
@@ -972,6 +973,26 @@ class ShelfStore:
                         "removed_stale": removed, "foreign_left_alone": foreign},
                        indent=2, sort_keys=True).encode(),
         )
+        # The mirror is written file by file, and each write is atomic, so no reader sees half a
+        # file — but nothing yet stops a reader from seeing the *set* half-rotated: manifest.json
+        # from this publish beside search.json from the last one. Written last, this file is the
+        # point where the mirror becomes a snapshot: it names the generation and the digest of every
+        # file this publish wrote, so "same generation" is checkable instead of assumed.
+        snap = {
+            "generation": int(man.get("manifest_generation") or 0),
+            "written_at": _now(),
+            # It cannot name a digest of itself: the value written now is the one being replaced.
+            "files": {name: sha256_hex((self.public_dir / name).read_bytes())
+                      for name in sorted(wrote)
+                      if name != "snapshot.json" and (self.public_dir / name).is_file()},
+            "note": ("Read this file first, then any file it names: if the digest matches, your copy "
+                     "is from this generation. A later publish replaces it whole, so a generation "
+                     "number that reaches you with files that do not match it is a torn read, not a "
+                     "newer shelf. This file names no digest for itself; it is the boundary, not a "
+                     "member of the set it describes."),
+        }
+        _atomic_write(self.public_dir / "snapshot.json",
+                      json.dumps(snap, indent=2, sort_keys=True).encode())
         return removed
 
     def mark_replicated(self, op_id: str, origin: str, observed: dict[str, Any]) -> None:

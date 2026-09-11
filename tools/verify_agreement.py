@@ -484,6 +484,8 @@ def check(surface, rep: Report, *, limit: int | None = None, strict: bool = Fals
     rep.add("A4 every catalog row says how it can be checked",
             FAIL if (strict and (empty or promised_url_missing)) else PASS, detail)
 
+    check_a5_snapshot(surface, man, strict, rep)
+
     # A2: the mirror's own withdrawal index must carry every tombstone.
     index = surface.mirror_index()
     if index is None:
@@ -621,6 +623,50 @@ def check(surface, rep: Report, *, limit: int | None = None, strict: bool = Fals
                         f"generation={gen} — a second reading through this host shares it, so "
                         "agreement here is agreement about ONE origin")
     return rep
+
+
+def check_a5_snapshot(surface, man, strict, rep):
+    """A5: the mirror's generation names a snapshot, not a moment.
+
+    Each file is written atomically, which stops a reader seeing half a file; nothing stopped a
+    reader seeing half a *set* — the manifest from this publish beside the search index from the
+    last one. `snapshot.json`, written last, names the generation and the digest this publish wrote
+    for each file. Reported by boba-pharos-01: "generation is useful for comparison only if it
+    refers to an atomic snapshot of the manifest; otherwise two reads with the same number can still
+    see a mixed state". A missing snapshot is not a failure by itself — a mirror published by an
+    older version has none — but it is UNKNOWN, not PASS, and in strict it fails.
+    """
+    try:
+        snap = json.loads(surface.mirror_bytes("snapshot.json") or b"")
+    except Exception as e:  # noqa: BLE001
+        rep.add("A5 the mirror's generation names a snapshot",
+                UNKNOWN if not strict else FAIL,
+                f"no snapshot.json at the mirror ({type(e).__name__}); a reader cannot tell a torn "
+                f"read from a newer shelf, so nothing here is claimed about set-level consistency")
+        return
+    named = snap.get("files") or {}
+    snap_gen = snap.get("generation")
+    man_gen = man.get("manifest_generation")
+    bad = []
+    for name, want in sorted(named.items()):
+        try:
+            body = surface.mirror_bytes(name)
+        except Exception as e:  # noqa: BLE001
+            bad.append(f"{name}: unreachable ({type(e).__name__})")
+            continue
+        if body is None:
+            bad.append(f"{name}: named by the snapshot but not served")
+            continue
+        got = hashlib.sha256(body).hexdigest()
+        if got != want:
+            bad.append(f"{name}: snapshot says {want[:12]}…, serves {got[:12]}…")
+    if snap_gen != man_gen:
+        bad.append(f"snapshot names generation {snap_gen}, the served manifest says {man_gen}")
+    rep.add("A5 the mirror's generation names a snapshot",
+            FAIL if bad else PASS,
+            (f"generation {snap_gen}; {len(named)} file(s) named with a digest; "
+             + ("; ".join(bad[:3]) if bad else "every named file serves the bytes the snapshot records"))
+            if named else f"generation {snap_gen} names no files")
 
 
 def main() -> int:

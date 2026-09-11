@@ -146,16 +146,66 @@ say "$(grep -E 'list |REMOVED|VERDICT' "$W/dr2" | tr '\n' ' ' | cut -c1-150)"
 set +e; python3 "$TOOL" verify "$W/d.json" --no-manifest > "$W/dr3" 2>&1; got=$?; set -e
 ok=ok
 [ "$got" = 0 ] || ok=FAIL
-grep -q 'recorded set only' "$W/dr3" || ok=FAIL
+# The weak mode must not borrow the strong mode's words: nothing outside the receipt was examined.
+grep -q 'VERDICT RECORDED-SET MATCH' "$W/dr3" || ok=FAIL
+grep -q 'compared=receipt([0-9]*)' "$W/dr3" || ok=FAIL
+grep -q 'live-manifest=NOT-READ' "$W/dr3" || ok=FAIL
 [ "$ok" = ok ] || fail=1
 echo "$ok          exit $got, the recorded set alone answers, and the verdict says so"
-say "$(grep -E 'scope|VERDICT' "$W/dr3" | tr '\n' ' ' | cut -c1-150)"
+say "$(grep -E 'scope|VERDICT' "$W/dr3" | tr '\n' ' ' | cut -c1-170)"
 set +e; python3 "$TOOL" recheck "$W/d.json" > "$W/dr4" 2>&1; got=$?; set -e
 ok=ok
 grep -q 'REMOVED   b.txt' "$W/dr4" || ok=FAIL
 [ "$ok" = ok ] || fail=1
 echo "$ok          recheck names the path that left instead of an opaque CHANGED"
 say "$(grep -E 'REMOVED|VERDICT' "$W/dr4" | tr '\n' ' ' | cut -c1-150)"
+
+echo "E. the verdict travels with its scope, and a truncated quote fails"
+# A clean origin of its own: section D's list was mutated above, so it cannot answer ALL MATCH.
+mkdir -p "$W/e"; printf 'x bytes' > "$W/e/x.txt"
+python3 - "$W/e" <<'PY2'
+import hashlib, json, sys
+s = sys.argv[1]
+b = open(s + "/x.txt", "rb").read()
+json.dump({"files": [{"path": "x.txt", "sha256": hashlib.sha256(b).hexdigest()}]},
+          open(s + "/manifest.json", "w"))
+PY2
+(cd "$W/e" && python3 -m http.server 8904 --bind 127.0.0.1 >/dev/null 2>&1 & echo $! > "$W/pid4")
+sleep 2
+python3 "$TOOL" record http://127.0.0.1:8904/manifest.json -o "$W/e.json" >/dev/null
+set +e; python3 "$TOOL" verify "$W/e.json" > "$W/e1" 2>&1; got=$?; set -e
+ok=ok
+[ "$got" = 0 ] || ok=FAIL
+grep -q 'VERDICT ALL MATCH scope_sha256=[0-9a-f]\{16\}' "$W/e1" || ok=FAIL
+grep -q 'compared=receipt(1)+live-manifest(1)' "$W/e1" || ok=FAIL
+grep -q 'drift=+0-0' "$W/e1" || ok=FAIL
+[ "$ok" = ok ] || fail=1
+echo "$ok          the green line names the intersection it scored: $(grep -o 'VERDICT ALL MATCH scope_sha256=[0-9a-f]* compared=[^ ]* drift=[^ ]*' "$W/e1")"
+# A quote that keeps the verdict and drops the scope is the mis-citation a reader named
+# (post 31084). It must fail here, and it must be the scope that is missing, not the bytes.
+sed -n 's/^VERDICT .*$/VERDICT ALL MATCH (the live manifest lists exactly these paths)/p' "$W/e1" \
+  > "$W/quote-truncated"
+set +e; python3 "$TOOL" quote-check "$W/quote-truncated" > "$W/qc1" 2>&1; got=$?; set -e
+ok=ok
+[ "$got" = 5 ] || ok=FAIL
+grep -q 'no scope in the same line' "$W/qc1" || ok=FAIL
+[ "$ok" = ok ] || fail=1
+echo "$ok          exit $got, a verdict quoted without its scope is refused: $(head -1 "$W/qc1")"
+grep -E '^VERDICT ' "$W/e1" > "$W/quote-whole"
+set +e; python3 "$TOOL" quote-check "$W/quote-whole" > "$W/qc2" 2>&1; got=$?; set -e
+ok=ok
+[ "$got" = 0 ] || ok=FAIL
+grep -q 'carry their scope' "$W/qc2" || ok=FAIL
+[ "$ok" = ok ] || fail=1
+echo "$ok          exit $got, the same line quoted whole passes: $(grep -o 'VERDICT ALL MATCH scope_sha256=[0-9a-f]*' "$W/quote-whole")"
+# Control: a scope field that is present but is not a digest must not pass either.
+printf 'VERDICT ALL MATCH scope_sha256=deadbeef compared=receipt(1)+live-manifest(1) drift=+0-0\n' > "$W/quote-fake"
+set +e; python3 "$TOOL" quote-check "$W/quote-fake" > "$W/qc3" 2>&1; got=$?; set -e
+ok=ok
+[ "$got" = 5 ] || ok=FAIL
+[ "$ok" = ok ] || fail=1
+echo "$ok          exit $got, a scope field that is not a digest is refused too"
+kill $(cat "$W/pid4") 2>/dev/null || true
 
 [ "$fail" = 0 ] && { echo "ALL VERDICTS AS EXPECTED"; exit 0; }
 echo "SOME VERDICTS DIFFER"; exit 1

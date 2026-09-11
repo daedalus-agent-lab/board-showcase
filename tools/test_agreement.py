@@ -9,6 +9,7 @@ Run: python3 tools/test_agreement.py
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -22,6 +23,7 @@ sys.path.insert(0, str(HERE))
 
 from shelf_lib import check_package, sha256_hex  # noqa: E402
 from shelf_store import ShelfStore  # noqa: E402
+from verify_agreement import FAIL, PASS, UNKNOWN, Report, check_a5_snapshot  # noqa: E402
 
 CHECK = Path(os.environ.get("AGREEMENT_PY", str(HERE / "verify_agreement.py"))).resolve()
 
@@ -434,6 +436,58 @@ class AgreementTests(unittest.TestCase):
         cmd = [sys.executable, str(CHECK), "--data", str(Path(self.tmp.name) / "nope")]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
         self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+
+
+class SnapshotBoundaryTests(unittest.TestCase):
+    """A generation number is a comparison only if it names a snapshot (boba-pharos-01, seq 31088)."""
+
+    def surface(self, files):
+        class S:
+            mirror = "http://mirror.invalid/board-showcase"
+
+            def mirror_bytes(self, name):
+                return files.get(name)
+        return S()
+
+    def add(self, gen_manifest, **kw):
+        man = {"manifest_generation": gen_manifest, "artifacts": []}
+        rep = Report()
+        check_a5_snapshot(kw["surface"], man, kw.get("strict", False), rep)
+        return rep
+
+    def test_a_file_that_does_not_match_its_recorded_digest_is_a_torn_read(self):
+        body = b'{"a": 1}'
+        snap = json.dumps({"generation": 7, "files": {"manifest.json": "0" * 64}}).encode()
+        rep = self.add(7, surface=self.surface({"manifest.json": body, "snapshot.json": snap}))
+        line = [r for r in rep.rows if r[0].startswith("A5")][0]
+        self.assertEqual(line[1], FAIL)
+        self.assertIn("serves", line[2])
+
+    def test_a_generation_that_disagrees_with_the_manifest_is_reported(self):
+        body = b'{"manifest_generation": 8, "artifacts": []}'
+        snap = json.dumps({"generation": 7, "files": {"manifest.json":
+                                                      hashlib.sha256(body).hexdigest()}}).encode()
+        rep = self.add(8, surface=self.surface({"manifest.json": body, "snapshot.json": snap}))
+        line = [r for r in rep.rows if r[0].startswith("A5")][0]
+        self.assertEqual(line[1], FAIL)
+        self.assertIn("snapshot names generation 7", line[2])
+
+    def test_a_matching_snapshot_passes(self):
+        body = b'{"manifest_generation": 7, "artifacts": []}'
+        snap = json.dumps({"generation": 7, "files": {"manifest.json":
+                                                      hashlib.sha256(body).hexdigest()}}).encode()
+        rep = self.add(7, surface=self.surface({"manifest.json": body, "snapshot.json": snap}))
+        line = [r for r in rep.rows if r[0].startswith("A5")][0]
+        self.assertEqual(line[1], PASS)
+        self.assertIn("every named file serves the bytes", line[2])
+
+    def test_no_snapshot_is_unknown_and_not_pass(self):
+        body = b'{"manifest_generation": 7, "artifacts": []}'
+        rep = self.add(7, surface=self.surface({"manifest.json": body}))
+        line = [r for r in rep.rows if r[0].startswith("A5")][0]
+        self.assertEqual(line[1], UNKNOWN)
+        rep_strict = self.add(7, surface=self.surface({"manifest.json": body}), strict=True)
+        self.assertEqual([r for r in rep_strict.rows if r[0].startswith("A5")][0][1], FAIL)
 
 
 if __name__ == "__main__":

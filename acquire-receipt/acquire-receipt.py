@@ -41,6 +41,7 @@ import hashlib
 import json
 import os
 import sys
+from pathlib import Path
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -81,6 +82,60 @@ def same_origin(a: str, b: str) -> bool:
 
 def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def scope_of(mode: str, receipt_paths, live_paths, added, removed) -> tuple[str, dict]:
+    """The compared set, canonicalised, and its digest.
+
+    A verdict is a claim about an intersection, so the intersection is part of the claim. Published
+    as `scope_sha256` and repeated *inside* the verdict line: a reader who copies one line and not
+    the paragraph around it keeps the scope, which is the whole point of the change.
+    """
+    scope = {
+        "mode": mode,
+        "receipt": sorted(receipt_paths),
+        "live": sorted(live_paths) if live_paths is not None else None,
+        "added": sorted(added),
+        "removed": sorted(removed),
+    }
+    return digest(json.dumps(scope, sort_keys=True, separators=(",", ":")).encode()), scope
+
+
+def verdict(kind: str, scope: dict, scope_sha: str, extra: str = "") -> str:
+    """One line that cannot be quoted into a stronger claim than it makes.
+
+    `ALL MATCH` is reserved for the run that re-read the live file list; the run that scored only
+    the recorded paths says so in the verdict word itself (`RECORDED-SET MATCH`). Before this, both
+    printed the same two words and only the scope line above them differed, which a quote drops.
+    """
+    live = scope["live"]
+    compared = (f"receipt({len(scope['receipt'])})+live-manifest({len(live)})" if live is not None
+                else f"receipt({len(scope['receipt'])})+live-manifest=NOT-READ")
+    drift = f"drift=+{len(scope['added'])}-{len(scope['removed'])}"
+    line = f"VERDICT {kind} scope_sha256={scope_sha[:16]} compared={compared} {drift}"
+    return f"{line} {extra}" if extra else line
+
+
+def quote_scan(text: str) -> list[tuple[int, str, str]]:
+    """(line number, verdict kind, reason) for every verdict line that cannot be quoted safely.
+
+    The rule this enforces, at the reader's end rather than the writer's: a verdict quoted every
+    which way must carry the compared set with it, or it is a green word with nothing behind it.
+    """
+    bad = []
+    for n, line in enumerate(text.splitlines(), 1):
+        s = line.strip()
+        if not s.startswith("VERDICT "):
+            continue
+        kind = s.split()[1] if len(s.split()) > 1 else ""
+        if "scope_sha256=" not in s or "compared=" not in s:
+            bad.append((n, kind, "no scope in the same line: quote it with its scope, or ask the "
+                                      "author for the line that carries one"))
+            continue
+        tok = s.split("scope_sha256=", 1)[1].split()[0]
+        if len(tok) < 12 or any(c not in "0123456789abcdef" for c in tok):
+            bad.append((n, kind, f"scope_sha256 is not a digest: {tok!r}"))
+    return bad
 
 
 def short(s: str, n: int = 16) -> str:
@@ -341,6 +396,7 @@ def cmd_verify(args: list[str]) -> int:
     # paths already in the receipt, and says nothing about a path the publisher added or dropped.
     added = removed = []
     manifest_read = False
+    live = None
     if not check_list:
         print("scope     the file list is NOT checked (--no-manifest): this answers only about the "
               "paths already in the receipt")
@@ -416,20 +472,63 @@ def cmd_verify(args: list[str]) -> int:
             print(f"CHANGED   {path}  expected {short(want['sha256'])}…; served {short(got)}…  ({u})")
             changed += 1
     print(f"checked {len(files)} files, {changed} changed, {missing} missing, {unverifiable} unverifiable")
+    mode = "receipt+live-manifest" if manifest_read else "receipt-only"
+    scope_sha, scope = scope_of(mode, files.keys(), live if manifest_read else None, added, removed)
+    print(f"scope_sha256 {scope_sha}")
     if added or removed:
-        print(f"VERDICT CHANGED (the live manifest's file list drifted: {len(added)} added, "
-              f"{len(removed)} removed)")
+        print(verdict("CHANGED", scope, scope_sha,
+                      f"(the live manifest's file list drifted: {len(added)} added, "
+                      f"{len(removed)} removed)"))
         return 1
     if changed or missing or unverifiable:
+        reason = ("serves different bytes" if changed else
+                  ("no reader-measured digest" if unverifiable else "nothing served"))
+        print(verdict("CHANGED" if changed else ("UNVERIFIABLE" if unverifiable else "MISSING"),
+                      scope, scope_sha, f"({reason})"))
         return 1 if changed else (4 if unverifiable else 2)
     if manifest_read:
         print("scope     this compared two named lists (the receipt and the live manifest); a path "
               "on the server that appears in neither is not looked for and would not be reported")
-        print("VERDICT ALL MATCH (the live manifest lists exactly these paths)")
+        print(verdict("ALL MATCH", scope, scope_sha))
     else:
         print("scope     the live file list was not read, and no path outside the receipt is "
               "examined; this is not a statement about the release tree")
-        print("VERDICT ALL MATCH (recorded set only; the live file list was not read)")
+        # Not `ALL MATCH`: nothing outside the receipt was examined, so `ALL` would be the overclaim.
+        print(verdict("RECORDED-SET MATCH", scope, scope_sha))
+    return 0
+
+
+def cmd_quote_check(args: list[str]) -> int:
+    """Read a quote of this tool's output and refuse any verdict that travels without its scope.
+
+    The ask came from a reader: a quote of the green line alone can mis-cite the tool, because the
+    limit lives in the paragraph above it. The fix has two halves — the verdict line now carries the
+    compared set, and this command lets anyone check that a quote does too.
+    """
+    if not args:
+        die("usage: acquire-receipt.py quote-check <file> [<file>...]  (use - for stdin)")
+    text = ""
+    names = []
+    for a in args:
+        if a == "-":
+            text += sys.stdin.read()
+            names.append("stdin")
+        else:
+            text += Path(a).read_text(errors="replace")
+            names.append(a)
+    bad = quote_scan(text)
+    seen = [ln.strip() for ln in text.splitlines() if ln.strip().startswith("VERDICT ")]
+    for n, kind, why in bad:
+        print(f"UNSAFE    line {n}: {kind or '(no kind)'} — {why}")
+    if not seen:
+        print("NOTE      no verdict line in this text; nothing to check")
+        return 0
+    if bad:
+        print(f"{len(bad)} of {len(seen)} verdict line(s) cannot be quoted safely")
+        return 5
+    for line in seen:
+        print(f"SAFE      {line}")
+    print(f"all {len(seen)} verdict line(s) carry their scope")
     return 0
 
 
@@ -444,6 +543,8 @@ def main(argv: list[str]) -> int:
         return cmd_recheck(args)
     if cmd == "verify":
         return cmd_verify(args)
+    if cmd == "quote-check":
+        return cmd_quote_check(args)
     if cmd == "show":
         if not args:
             die("usage: acquire-receipt.py show <receipt.json>")
