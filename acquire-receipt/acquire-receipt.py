@@ -1,0 +1,464 @@
+#!/usr/bin/env python3
+"""acquire-receipt — keep your own receipt for bytes you downloaded, and later prove they changed.
+
+Why: a publisher's own verifier reads the manifest and the files at the same moment, so a
+re-publish of the same URL stays green under it. A digest you recorded *when you downloaded* lives
+outside the publisher's write surface; comparing against it detects a re-publish afterwards.
+
+Rules this tool holds itself to (each was a bug reported by a reader of an earlier version):
+  * The reader never lets the downloaded document choose what it measures. Files are measured at
+    base-url + path, where base-url is the reader's own derivation (the manifest's directory) or an
+    explicit --base. A `url` inside the manifest is recorded as a claim, never used to resolve.
+  * A digest transcribed from a manifest is not a measurement. `record` downloads every listed file
+    and hashes the bytes it got; the publisher's declared digest is kept beside it for comparison,
+    so a claim that was already wrong at download time is visible in the receipt.
+  * A list is not a set of digests. `verify` re-reads the *live manifest* and diffs its file list
+    against the receipt before scoring any digest, so adding or dropping a path is reported as
+    ADDED / REMOVED instead of hiding behind "checked N files, ALL MATCH". The recorded set alone is
+    checked only when the caller asks for it with --no-manifest, and then the verdict says so.
+  * Two named lists compared are not the release tree. A path that exists on the server but appears
+    in neither the receipt nor the live manifest never enters the check. Every verdict line that
+    says ALL MATCH is preceded by a scope line naming exactly that residue, so the green answer is
+    never quoted as if it had enumerated the server (reported by just-nik).
+
+Verdicts (exit codes): 0 UNCHANGED/ALL MATCH, 1 CHANGED (including manifest list drift), 2 MISSING,
+3 DEGRADED (the URL serves a different kind of document, e.g. an HTML error page), 4 UNVERIFIABLE
+(the receipt holds no reader-measured digest for that path, or the live manifest could not be read).
+
+Usage:
+  acquire-receipt.py record  <url> [--base URL] [--no-files] [-o receipt.json]
+  acquire-receipt.py recheck <receipt.json> [url]
+  acquire-receipt.py verify  <receipt.json> [--base URL] [--manifest-url URL] [--no-manifest]
+  acquire-receipt.py show    <receipt.json>
+
+Needs only python3. MIT.
+"""
+
+from __future__ import annotations
+
+import datetime
+import hashlib
+import json
+import os
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+SCHEMA = 3
+UA = "acquire-receipt/3 (reader-side acquisition receipt)"
+
+
+def now() -> str:
+    return datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def fetch(url: str):
+    """Fetch a URL. Returns (body, meta). Raises for transport failures."""
+    req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept-Encoding": "identity"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        body = r.read()
+        return body, {
+            "final_url": r.url,
+            "status": r.status,
+            "content_type": (r.headers.get("Content-Type") or "").split(";")[0].strip().lower(),
+            "redirects": [h.url for h in getattr(r, "history", []) or []],
+        }
+
+
+def base_dir(url: str) -> str:
+    p = urllib.parse.urlsplit(url)
+    path = p.path
+    if not path.endswith("/"):
+        path = path.rsplit("/", 1)[0] + "/"
+    return urllib.parse.urlunsplit((p.scheme, p.netloc, path, "", ""))
+
+
+def same_origin(a: str, b: str) -> bool:
+    pa, pb = urllib.parse.urlsplit(a), urllib.parse.urlsplit(b)
+    return (pa.scheme, pa.netloc) == (pb.scheme, pb.netloc)
+
+
+def digest(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def short(s: str, n: int = 16) -> str:
+    return s[:n]
+
+
+def file_record(rec: dict, path: str) -> dict:
+    """Read a file entry from a receipt; accept the flat v1 shape too."""
+    f = (rec.get("files") or {}).get(path)
+    if isinstance(f, str):
+        return {"sha256": f, "bytes": None, "status": "measured(v1)"}
+    return f or {}
+
+
+def die(msg: str) -> "NoReturn":  # type: ignore[valid-type]
+    print(f"acquire-receipt: {msg}", file=sys.stderr)
+    sys.exit(2)
+
+
+def _resolve_claim(rec: dict, base: str, path: str, claim: str) -> str:
+    """Resolve a manifest's own claim to a URL, but only within the receipt's origin.
+
+    A manifest is untrusted input: it may name a location the caller never asked about. A claim is
+    used only when the caller asks for it (--use-manifest-urls) and only inside the recorded origin;
+    anything else stops the run instead of silently checking the wrong place.
+    """
+    resolved = urllib.parse.urljoin(rec.get("final_url") or rec.get("url") or "", claim)
+    if not same_origin(resolved, base):
+        die(f"manifest points {path} outside the receipt's origin ({resolved}); refusing to use it. "
+            f"Pass --base for the location you intend to check.")
+    return resolved
+
+
+def _claim_url(rec: dict, claims: dict, path: str):
+    claim = claims.get(path)
+    if not claim:
+        return None
+    base = rec.get("base_url") or rec.get("final_url") or rec.get("url") or ""
+    return _resolve_claim(rec, base, path, claim)
+
+
+def listed_paths(body: bytes):
+    """The paths a manifest document lists, or None if this document is not a file list at all."""
+    if body[:1] not in (b"{", b"["):
+        return None
+    try:
+        doc = json.loads(body)
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(doc, dict):
+        return None
+    if not isinstance(doc.get("files"), list):
+        return []
+    return [f["path"] for f in doc["files"] if isinstance(f, dict) and isinstance(f.get("path"), str)]
+
+
+def list_drift(rec: dict, live: list, recorded: dict):
+    """Paths that joined or left the manifest's file list since the receipt was written."""
+    added = sorted(set(live) - set(recorded))
+    removed = sorted(set(recorded) - set(live))
+    return added, removed
+
+
+def report_drift(added: list, removed: list, where: str) -> None:
+    for p in added:
+        print(f"  ADDED     {p}  (in the live manifest, not in the receipt)  <{where}>")
+    for p in removed:
+        print(f"  REMOVED   {p}  (in the receipt, absent from the live manifest)  <{where}>")
+
+
+def cmd_record(args: list[str]) -> int:
+    if not args:
+        die("usage: acquire-receipt.py record <url> [--base URL] [--use-manifest-urls] [--no-files] [-o receipt.json]")
+    url = args[0]
+    base = None
+    out = "receipt.json"
+    with_files = True
+    use_claims = False
+    i = 1
+    while i < len(args):
+        a = args[i]
+        if a == "--base":
+            i += 1; base = args[i]
+        elif a == "--use-manifest-urls":
+            use_claims = True
+        elif a == "--no-files":
+            with_files = False
+        elif a in ("-o", "--out"):
+            i += 1; out = args[i]
+        else:
+            die(f"unknown argument: {a}")
+        i += 1
+
+    try:
+        body, meta = fetch(url)
+    except urllib.error.HTTPError as e:
+        die(f"HTTP {e.code} from {url}")
+    except Exception as e:  # noqa: BLE001
+        die(f"fetch failed: {url}: {e}")
+
+    rec = {
+        "receipt_schema": SCHEMA,
+        "url": url,
+        "final_url": meta["final_url"],
+        "redirects": meta["redirects"],
+        "content_type": meta["content_type"],
+        "fetched_at_utc": now(),
+        "sha256": digest(body),
+        "bytes": len(body),
+    }
+
+    doc = None
+    if body[:1] in (b"{", b"["):
+        try:
+            doc = json.loads(body)
+        except Exception:  # noqa: BLE001
+            doc = None
+
+    listed = []
+    if isinstance(doc, dict) and isinstance(doc.get("files"), list):
+        listed = [f for f in doc["files"] if isinstance(f, dict) and isinstance(f.get("path"), str)]
+
+    print(f"receipt   {out}")
+    print(f"url       {url}")
+    if meta["final_url"] != url:
+        print(f"final     {meta['final_url']}  ({len(meta['redirects'])} redirect(s): {' -> '.join(meta['redirects'] + [meta['final_url']])})")
+    print(f"type      {meta['content_type'] or '(none)'}")
+    print(f"sha256    {rec['sha256']}")
+    print(f"bytes     {rec['bytes']}")
+    print(f"fetched   {rec['fetched_at_utc']}")
+
+    if listed and with_files:
+        base = base or base_dir(meta["final_url"])
+        rec["base_url"] = base
+        rec["files"] = {}
+        rec["files_declared"] = {}
+        rec["manifest_url_claims"] = {}
+        mismatch, unreachable, claims_elsewhere = [], [], []
+        for f in listed:
+            path = f["path"]
+            declared = f.get("sha256") if isinstance(f.get("sha256"), str) else None
+            claim = f.get("url") if isinstance(f.get("url"), str) else None
+            if declared:
+                rec["files_declared"][path] = declared
+            u = urllib.parse.urljoin(base, path)
+            if use_claims and claim:
+                u = _resolve_claim(rec, base, path, claim)
+            if claim:
+                rec["manifest_url_claims"][path] = claim
+                resolved = urllib.parse.urljoin(meta["final_url"], claim)
+                if resolved.rstrip("/") != urllib.parse.urljoin(base, path).rstrip("/"):
+                    claims_elsewhere.append((path, resolved))
+            try:
+                fb, _ = fetch(u)
+                got = digest(fb)
+                rec["files"][path] = {"sha256": got, "bytes": len(fb), "status": "measured", "url": u}
+                if declared and declared != got:
+                    mismatch.append((path, declared, got))
+            except urllib.error.HTTPError as e:
+                rec["files"][path] = {"sha256": None, "bytes": None, "status": f"http-{e.code}", "url": u}
+                unreachable.append((path, f"HTTP {e.code}"))
+            except Exception as e:  # noqa: BLE001
+                rec["files"][path] = {"sha256": None, "bytes": None, "status": "unreachable", "url": u}
+                unreachable.append((path, type(e).__name__))
+        print(f"base      {base}   (the same directory tree is used for every listed path)")
+        if use_claims:
+            print("note      locations come from the manifest's own claims (--use-manifest-urls): the "
+                  "receipt records the URL each digest was measured at")
+        print(f"files     {len(rec['files'])} listed, {len(rec['files']) - len(unreachable)} measured, "
+              f"{len(mismatch)} declared-mismatch, {len(unreachable)} unreachable")
+        for path, declared, got in mismatch:
+            print(f"  MISMATCH  {path}: manifest declared {short(declared)}, measured {short(got)}")
+        for path, why in unreachable:
+            print(f"  MISSING   {path}: not fetchable from base+path ({why})")
+        for path, resolved in claims_elsewhere:
+            print(f"  CLAIM     {path}: manifest points at {resolved}, which is not base+path; not used")
+        rec["declared_mismatch"] = [p for p, _, _ in mismatch]
+    elif listed:
+        print(f"files     {len(listed)} listed; --no-files set, no reader measurement taken")
+    else:
+        print("files     (the document lists none)")
+
+    with open(out, "w") as fh:
+        fh.write(json.dumps(rec, indent=1, sort_keys=True) + "\n")
+    return 0
+
+
+def cmd_recheck(args: list[str]) -> int:
+    if not args:
+        die("usage: acquire-receipt.py recheck <receipt.json> [url]")
+    rec = json.load(open(args[0]))
+    url = args[1] if len(args) > 1 else rec["url"]
+    try:
+        body, meta = fetch(url)
+    except urllib.error.HTTPError as e:
+        print(f"MISSING   HTTP {e.code} from {url}")
+        return 2
+    except Exception as e:  # noqa: BLE001
+        print(f"MISSING   {url} is not reachable ({type(e).__name__})")
+        return 2
+
+    got = digest(body)
+    was = rec.get("sha256")
+    print(f"receipt   {short(was, 32)}  kept since {rec.get('fetched_at_utc')}")
+    print(f"served    {short(got, 32)}  {url}")
+    prev_final = rec.get("final_url") or url
+    if meta["final_url"] != prev_final:
+        print(f"final     now {meta['final_url']}  (was {prev_final})")
+    old_type, new_type = rec.get("content_type") or "", meta["content_type"] or ""
+    if old_type and new_type and old_type != new_type:
+        structured = ("json" in old_type) or ("octet-stream" in old_type) or ("text/plain" in old_type)
+        if structured and "html" in new_type:
+            print(f"DEGRADED  the URL now serves {new_type} where the receipt recorded {old_type} — "
+                  f"this is usually an error page, not a changed release")
+            return 3
+        print(f"note      content-type changed: {old_type} -> {new_type}")
+    live = listed_paths(body)
+    if live is not None and rec.get("files"):
+        added, removed = list_drift(rec, live, rec["files"])
+        if added or removed:
+            print(f"list      {len(live)} path(s) now, {len(rec['files'])} in the receipt")
+            report_drift(added, removed, url)
+    if got == was:
+        print("VERDICT UNCHANGED")
+        return 0
+    print("VERDICT CHANGED — this URL no longer serves the bytes your receipt binds")
+    return 1
+def cmd_verify(args: list[str]) -> int:
+    if not args:
+        die("usage: acquire-receipt.py verify <receipt.json> [--base URL] [--manifest-url URL] "
+            "[--no-manifest] [--use-manifest-urls]")
+    rec = json.load(open(args[0]))
+    base = rec.get("base_url")
+    use_claims = False
+    base_given = False
+    check_list = True
+    manifest_url = rec.get("url")
+    i = 1
+    while i < len(args):
+        if args[i] == "--base":
+            i += 1; base = args[i]; base_given = True
+        elif args[i] == "--manifest-url":
+            i += 1; manifest_url = args[i]
+        elif args[i] == "--no-manifest":
+            check_list = False
+        elif args[i] == "--use-manifest-urls":
+            use_claims = True
+        else:
+            die(f"unknown argument: {args[i]}")
+        i += 1
+    if not base:
+        die("this receipt has no base_url; pass --base <url>")
+    files = rec.get("files") or {}
+    if not files:
+        die("this receipt lists no files to verify")
+
+    # The structural question comes first: a tidy "checked N files, ALL MATCH" answers about the
+    # paths already in the receipt, and says nothing about a path the publisher added or dropped.
+    added = removed = []
+    manifest_read = False
+    if not check_list:
+        print("scope     the file list is NOT checked (--no-manifest): this answers only about the "
+              "paths already in the receipt")
+    elif not manifest_url:
+        print("manifest  this receipt names no manifest URL; pass --manifest-url <url> to check the file list")
+    else:
+        try:
+            mbody, mmeta = fetch(manifest_url)
+        except urllib.error.HTTPError as e:
+            print(f"manifest  MISSING  HTTP {e.code} at {manifest_url}")
+            print("VERDICT UNVERIFIABLE (the live manifest could not be read, so its file list is unknown)")
+            return 4
+        except Exception as e:  # noqa: BLE001
+            print(f"manifest  MISSING  unreachable ({type(e).__name__}) at {manifest_url}")
+            print("VERDICT UNVERIFIABLE (the live manifest could not be read, so its file list is unknown)")
+            return 4
+        was_type, now_type = rec.get("content_type") or "", mmeta["content_type"] or ""
+        if "json" in was_type and now_type and "json" not in now_type:
+            print(f"manifest  DEGRADED  {manifest_url} now serves {now_type} where the receipt "
+                  f"recorded {was_type}")
+            return 3
+        live = listed_paths(mbody)
+        if live is None:
+            print(f"manifest  DEGRADED  {manifest_url} no longer parses as a file list "
+                  f"(content-type {now_type or 'none'})")
+            return 3
+        manifest_read = True
+        added, removed = list_drift(rec, live, files)
+        print(f"manifest  {manifest_url}  (re-read now)")
+        print(f"list      {len(live)} path(s) now, {len(files)} in the receipt")
+        report_drift(added, removed, manifest_url)
+        if digest(mbody) != (rec.get("sha256") or ""):
+            print("note      the manifest's document bytes differ from the recorded ones; the list above "
+                  "is what the live document says")
+
+    claims = rec.get("manifest_url_claims") or {}
+    if use_claims:
+        print("note      file locations come from the manifest's own claims (--use-manifest-urls):")
+        for path in sorted(files):
+            u = _claim_url(rec, claims, path)
+            if u:
+                print(f"  claim     {path} -> {u}")
+
+    changed = missing = unverifiable = 0
+    for path in sorted(files):
+        want = file_record(rec, path)
+        if base_given:
+            u = urllib.parse.urljoin(base, path)
+        elif use_claims:
+            u = _claim_url(rec, claims, path) or urllib.parse.urljoin(base, path)
+        elif want.get("url"):
+            # the reader measured this digest at this URL; a recorded measurement is a fact
+            u = want["url"]
+        else:
+            u = urllib.parse.urljoin(base, path)
+        try:
+            body, _ = fetch(u)
+        except urllib.error.HTTPError as e:
+            print(f"MISSING   {path}  HTTP {e.code} at {u}")
+            missing += 1
+            continue
+        except Exception as e:  # noqa: BLE001
+            print(f"MISSING   {path}  unreachable ({type(e).__name__}) at {u}")
+            missing += 1
+            continue
+        got = digest(body)
+        if not want.get("sha256"):
+            declared = (rec.get("files_declared") or {}).get(path)
+            note = f"; the manifest declared {short(declared)}" if declared else ""
+            print(f"UNVERIFIABLE  {path}: no reader-measured digest in the receipt{note}")
+            unverifiable += 1
+        elif got != want["sha256"]:
+            print(f"CHANGED   {path}  expected {short(want['sha256'])}…; served {short(got)}…  ({u})")
+            changed += 1
+    print(f"checked {len(files)} files, {changed} changed, {missing} missing, {unverifiable} unverifiable")
+    if added or removed:
+        print(f"VERDICT CHANGED (the live manifest's file list drifted: {len(added)} added, "
+              f"{len(removed)} removed)")
+        return 1
+    if changed or missing or unverifiable:
+        return 1 if changed else (4 if unverifiable else 2)
+    if manifest_read:
+        print("scope     this compared two named lists (the receipt and the live manifest); a path "
+              "on the server that appears in neither is not looked for and would not be reported")
+        print("VERDICT ALL MATCH (the live manifest lists exactly these paths)")
+    else:
+        print("scope     the live file list was not read, and no path outside the receipt is "
+              "examined; this is not a statement about the release tree")
+        print("VERDICT ALL MATCH (recorded set only; the live file list was not read)")
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) < 2 or argv[1] in ("-h", "--help", "help"):
+        print(__doc__.strip())
+        return 0 if len(argv) > 1 else 2
+    cmd, args = argv[1], argv[2:]
+    if cmd == "record":
+        return cmd_record(args)
+    if cmd == "recheck":
+        return cmd_recheck(args)
+    if cmd == "verify":
+        return cmd_verify(args)
+    if cmd == "show":
+        if not args:
+            die("usage: acquire-receipt.py show <receipt.json>")
+        sys.stdout.write(open(args[0]).read())
+        return 0
+    die(f"unknown command: {cmd}")
+
+
+if __name__ == "__main__":
+    # A reader piping the report into `head` or `grep -q` should see a verdict, not a traceback.
+    try:
+        sys.exit(main(sys.argv))
+    except BrokenPipeError:
+        try:
+            sys.stdout = open(os.devnull, "w")
+        except OSError:
+            pass
+        sys.exit(141)
