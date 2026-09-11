@@ -143,6 +143,33 @@ class ShelfStore:
                             "reason": sup.get("reason"), "at": sup.get("at")}
         return out
 
+    def attributed(self) -> dict[str, dict[str, Any]]:
+        """Reconstructed predecessors: entries that say "this digest was displaced by that row",
+        written by a tool from surviving evidence rather than witnessed by the write path.
+
+        Kept apart from `supersedes` on purpose. A witnessed replacement and a reconstruction read
+        the same to a reader, and only one of them can be wrong; if they share a field, nothing
+        downstream can tell which kind of claim it is holding. `basis` names the evidence class,
+        `evidence` lists what was checked, and `witnessed` is false by construction.
+        """
+        p = self.data_dir / "attributed.json"
+        if not p.is_file():
+            return {}
+        try:
+            return dict(_read_json(p).get("entries") or {})
+        except Exception:  # noqa: BLE001
+            return {}
+
+    def attributed_totals(self) -> tuple[int, int]:
+        """(bytes, count) of served blobs whose displacement is reconstructed, not witnessed."""
+        total_b = count = 0
+        for digest in sorted(self.attributed()):
+            p = self.blobs / digest
+            if p.is_file():
+                total_b += p.stat().st_size
+                count += 1
+        return total_b, count
+
     def orphan_totals(self) -> tuple[int, int]:
         """(bytes, count) of served blobs with **no receipt at all** — the defining property.
 
@@ -154,7 +181,7 @@ class ShelfStore:
         """
         man = self.load_manifest()
         live = {a.get("sha256") for a in man.get("artifacts") or [] if a.get("bytes") is not None}
-        recounted = set(self.superseded_digests())
+        recounted = set(self.superseded_digests()) | set(self.attributed())
         total_b = count = 0
         for p in sorted(self.blobs.glob("*")):
             if not p.is_file() or p.name in live or p.name in recounted or self.tombstone_of(p.name):
@@ -402,6 +429,20 @@ class ShelfStore:
                 body["superseded_by"] = sup
                 body["note"] = ("bytes retained; the name this object was published under is now "
                                 "served by a newer object — see superseded_by")
+            elif (rec := self.attributed().get(sha256)):
+                # Reconstructed, not witnessed: the pointer is offered, but labelled, because a
+                # reader deciding what to trust needs to know which kind of claim this is. The state
+                # stays orphan_blob — nothing on the write path recorded this displacement.
+                body["predecessors_inferred"] = {
+                    "superseded_by": rec.get("superseded_by"),
+                    "filename": rec.get("filename"),
+                    "basis": rec.get("basis"),
+                    "evidence": rec.get("evidence") or [],
+                    "witnessed": False,
+                }
+                body["note"] = ("bytes retained, no live row; the name it held is now served by a "
+                                "newer object — reconstructed from surviving receipts, not "
+                                "witnessed (see predecessors_inferred)")
             return 200, body
         return 404, {"state": "never", "sha256": sha256}
 
@@ -750,8 +791,9 @@ class ShelfStore:
         """
         live_b, live_n = self.live_totals(exclude_sha256=exclude_sha256)
         sup_b, sup_n = self.superseded_totals()
+        att_b, att_n = self.attributed_totals()
         orphan_b, orphan_n = self.orphan_totals()
-        return live_b + sup_b + orphan_b, live_n + sup_n + orphan_n
+        return live_b + sup_b + att_b + orphan_b, live_n + sup_n + att_n + orphan_n
 
     def publish_public(self, sweep_foreign: bool = False) -> list[str]:
         """Write the mirror as a projection of the catalog, and return stale names removed.

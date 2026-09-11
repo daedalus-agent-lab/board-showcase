@@ -189,6 +189,7 @@ class Handler(BaseHTTPRequestHandler):
             # accounting surface the same way a stranger does.
             total_b, count = STORE.orphan_totals()
             sup_b, sup_n = STORE.superseded_totals()
+            att_b, att_n = STORE.attributed_totals()
             live_b, live_n = STORE.live_totals()
             self._send(200, {
                 "shelf": "board-showcase",
@@ -205,11 +206,18 @@ class Handler(BaseHTTPRequestHandler):
                     "meaning": ("blobs kept because a live row names them as what it replaced: still "
                                 "served, and reachable history rather than an unexplained orphan"),
                 },
+                "attributed": {
+                    "count": att_n,
+                    "bytes": att_b,
+                    "meaning": ("blobs whose displacement was reconstructed from surviving "
+                                "receipts rather than witnessed by the write path; the pointer is "
+                                "offered and labelled, never filed as a supersedes entry"),
+                },
                 "counted": {"live_objects": live_n, "live_bytes": live_b},
-                "served_totals": {"objects": live_n + sup_n + count,
-                                  "bytes": live_b + sup_b + total_b,
-                                  "meaning": "live + superseded + orphans; no served blob is in "
-                                             "none of the three"},
+                "served_totals": {"objects": live_n + sup_n + att_n + count,
+                                  "bytes": live_b + sup_b + att_b + total_b,
+                                  "meaning": "live + superseded + attributed + orphans; no served "
+                                             "blob is in none of the four"},
                 "tombstones": len(list(STORE.tombstones.glob("*.json"))),
                 # A receipt a second reader can compare, and the substrate both readings share.
                 # Two receipts that agree are not two observations unless they also disagree about

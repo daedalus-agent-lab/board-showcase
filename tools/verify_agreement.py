@@ -388,10 +388,12 @@ def check(surface, rep: Report, *, limit: int | None = None, strict: bool = Fals
     # that names only live and evicted forces every superseded object to present as one of the two:
     # as an orphan (it is not live) or as a lie (a 410 that contradicts the bytes still served).
     sup_pairs = []
+    sup_pairs_digests = []
     for a in man.get("artifacts") or []:
         s = a.get("supersedes") or {}
         if s.get("sha256"):
             sup_pairs.append((s["sha256"], a["sha256"]))
+            sup_pairs_digests.append(s)
     sup_bad, sup_lookup = [], []
     for old, new in sup_pairs:
         blob = surface.blob(old)
@@ -417,6 +419,16 @@ def check(surface, rep: Report, *, limit: int | None = None, strict: bool = Fals
     rep.add("S3 a served replacement carries no withdrawal receipt", FAIL if contradicted else PASS,
             "; ".join(contradicted[:5]))
 
+    # S4: the accounting depends on a digest being in exactly one bucket. A supersedes entry naming
+    # a digest that is itself live would be counted twice and would mean a live object was recorded
+    # as displaced by a row that also owns it.
+    live_digests = {a["sha256"] for a in man.get("artifacts") or [] if a.get("bytes") is not None}
+    doubled = sorted({s["sha256"] for s in sup_pairs_digests if s["sha256"] in live_digests})
+    rep.add("S4 no replacement names a digest that is itself live",
+            FAIL if doubled else PASS,
+            "; ".join(f"{d[:12]} is live and named as displaced" for d in doubled[:5])
+            or f"{len(live_digests)} live digest(s), none named as displaced")
+
     # A2: the mirror's own withdrawal index must carry every tombstone.
     index = surface.mirror_index()
     if index is None:
@@ -427,9 +439,10 @@ def check(surface, rep: Report, *, limit: int | None = None, strict: bool = Fals
         rep.add("A2 mirror withdrawal index covers every tombstone",
                 FAIL if missing else PASS, "; ".join(m[:12] for m in missing[:5]))
 
-    # A1: served but uncounted. Three buckets, named so that no served blob can fall outside all of
-    # them. The pair (live + orphans) was complete only because orphan_totals happened to count
-    # superseded blobs under a name that said they had no receipt.
+    # A1: served but uncounted. Four buckets, named so that no served blob can fall outside all of
+    # them, with the sum asserted rather than trusted. The pair (live + orphans) was complete only
+    # because orphan_totals happened to count superseded blobs under a name that said they had no
+    # receipt.
     if hasattr(surface, "data"):
         orphan_total = getattr(surface, "orphan_totals", None)
         sup_total = getattr(surface, "superseded_totals", None)
@@ -442,7 +455,13 @@ def check(surface, rep: Report, *, limit: int | None = None, strict: bool = Fals
             b, n = sup_total()
             rep.add("A1b served and named by a replacement (superseded)", PASS,
                     f"{n} blob(s), {b} bytes (reachable history, not residue)")
+        att_total = getattr(surface, "attributed_totals", None)
+        if att_total is not None:
+            b, n = att_total()
+            rep.add("A1c served with a reconstructed predecessor (attributed)", PASS,
+                    f"{n} blob(s), {b} bytes (inferred from surviving receipts; not witnessed)")
     else:
+        n = sn = an = None
         code, body = surface._get(f"{surface.api}/v1/shelf/agreement")
         if code != 200:
             rep.add("A1a served with no receipt at all (orphans)", UNKNOWN,
@@ -471,6 +490,30 @@ def check(surface, rep: Report, *, limit: int | None = None, strict: bool = Fals
             else:
                 rep.add("A1b served and named by a replacement (superseded)", PASS,
                         f"{sn} blob(s), {sb} bytes (reachable history, not residue)")
+            try:
+                at = json.loads(body)["attributed"]
+                ab, an = int(at["bytes"]), int(at["count"])
+            except Exception as e:  # noqa: BLE001
+                rep.add("A1c served with a reconstructed predecessor (attributed)", UNKNOWN,
+                        f"agreement endpoint returned an unexpected shape ({e})")
+            else:
+                rep.add("A1c served with a reconstructed predecessor (attributed)", PASS,
+                        f"{an} blob(s), {ab} bytes (inferred from receipts; not witnessed)")
+            if None in (n, sn, an):
+                rep.add("A1d the four buckets sum to served_totals", UNKNOWN,
+                        "at least one bucket was unreadable; a sum over three of four numbers "
+                        "would be a false total")
+            else:
+                try:
+                    expected = (int(json.loads(body)["counted"]["live_objects"]) + sn + an + n)
+                    reported = int(json.loads(body)["served_totals"]["objects"])
+                except Exception as e:  # noqa: BLE001
+                    rep.add("A1d the four buckets sum to served_totals", UNKNOWN, str(e))
+                else:
+                    rep.add("A1d the four buckets sum to served_totals",
+                            FAIL if expected != reported else PASS,
+                            f"live+superseded+attributed+orphans={expected}, "
+                            f"served_totals={reported}")
             try:
                 fence = json.loads(body)["fence"]
                 gen = json.loads(body).get("manifest_generation")

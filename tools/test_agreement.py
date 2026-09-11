@@ -224,7 +224,8 @@ class AgreementTests(unittest.TestCase):
                     body = json.dumps({"by_sha256": {}, "by_name": {}}).encode()
                 elif self.path == "/api/v1/shelf/agreement":
                     body = json.dumps({"orphans": {"meaning": "no count field here"},
-                                       "superseded": {"count": 0, "bytes": 0}}).encode()
+                                       "superseded": {"count": 0, "bytes": 0},
+                                       "attributed": {"count": 0, "bytes": 0}}).encode()
                 else:
                     self.send_response(404)
                     self.end_headers()
@@ -290,7 +291,11 @@ class AgreementTests(unittest.TestCase):
                 if self.path.startswith("/api/v1/blobs/") or self.path.startswith("/api/v1/by-sha256/"):
                     return self._json(410, {"state": "evicted", "tombstone": {"sha256": digest}})
                 if self.path == "/api/v1/shelf/agreement":
-                    return self._json(200, {"orphans": {"count": 0, "bytes": 0}})
+                    return self._json(200, {"orphans": {"count": 0, "bytes": 0},
+                                            "superseded": {"count": 0, "bytes": 0},
+                                            "attributed": {"count": 0, "bytes": 0},
+                                            "counted": {"live_objects": 0, "live_bytes": 0},
+                                            "served_totals": {"objects": 0, "bytes": 0}})
                 # A plain file server: no receipt, no memory.
                 body = b"404 page not found\n"
                 self.send_response(404)
