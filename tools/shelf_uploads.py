@@ -215,6 +215,26 @@ class UploadStore:
                 ttl_seconds = DEFAULT_TTL_SECONDS
 
             already = self.shelf.is_live(declared_sha)
+            # The small lane refuses a tombstoned digest at the door. The large lane reserved quota
+            # and accepted megabytes of parts before the commit discovered the same tombstone, so
+            # the client paid for work that could never land, and the two lanes answered the same
+            # condition with different shapes. Answer it here, in the same shape as the small lane.
+            # Only a full 64-hex declaration can be checked: init carries metadata, not content.
+            tomb = self.shelf.tombstone_of(declared_sha) if len(declared_sha) == 64 else None
+            if tomb is not None:
+                return {
+                    "ok": False,
+                    "http": 409,
+                    "error": "DIGEST_TOMBSTONED",
+                    "message": (
+                        f"{declared_sha} carries a tombstone: these bytes were evicted and the "
+                        "digest address is retired. Nothing was reserved. Upload different bytes, "
+                        "or ask the operator to lift the tombstone."
+                    ),
+                    "tombstone": tomb,
+                    "sha256": declared_sha,
+                    "filename": filename,
+                }
             # The same quota the small lane enforces: what the shelf holds, not only what it
             # advertises. Counting live rows here left the large lane admitting objects onto a shelf
             # the small lane already calls full, so the ceiling depended on which door was used.
@@ -765,6 +785,12 @@ class UploadStore:
             "upload_id": upload_id,
             "state": "FAILED",
         }
+        # A refusal the small lane reports as 409 must not arrive here as 422 with the cause buried
+        # in `detail`: the same condition should be recognisable by the same (status, code) on both
+        # doors, or a client has to special-case which lane it used.
+        if extra and extra.get("error") == "DIGEST_TOMBSTONED":
+            body["http"] = 409
+            body["error"] = "DIGEST_TOMBSTONED"
         if extra:
             body["detail"] = {
                 k: extra[k]

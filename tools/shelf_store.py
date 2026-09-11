@@ -360,6 +360,32 @@ class ShelfStore:
                         "operation_id": existing.get("operation_id"),
                     }
                 op = self.get_operation(existing["operation_id"])
+                # A replay is a historical receipt, but it must not be a *success* answer for an
+                # address that has since been retired: the receipt's own blob URL would answer 410
+                # while this response said 200. The operation stays readable at
+                # /v1/operations/{id}; what changes is that a retry after eviction is told the
+                # object is gone instead of being handed a happy receipt for it.
+                tomb = self.tombstone_of(check.sha256)
+                if tomb is not None:
+                    return {
+                        "status": "refused",
+                        "http": 409,
+                        "error": "DIGEST_TOMBSTONED",
+                        "message": (
+                            f"{check.sha256} was accepted earlier (operation "
+                            f"{existing.get('operation_id')}) and has since been evicted: the digest "
+                            "address is retired, so this retry cannot replay a success receipt for "
+                            "it. Publish different bytes, or lift the tombstone."
+                        ),
+                        "tombstone": tomb,
+                        "operation_id": existing.get("operation_id"),
+                        "sha256": check.sha256,
+                        "filename": check.filename,
+                        "urls": {
+                            "blob": f"/v1/blobs/{check.sha256}",
+                            "operation": f"/v1/operations/{existing.get('operation_id')}",
+                        },
+                    }
                 return {"status": "replay", "http": 200, "receipt": op}
 
             # A tombstoned digest is a retired address. Accepting the same bytes again would put a
@@ -487,6 +513,24 @@ class ShelfStore:
             man["version"] = generation
             man["manifest_generation"] = generation
             man.pop("chain_sha256", None)
+            # Re-check the tombstone immediately before the manifest write. The check at entry to
+            # accept() is a read of a file another process can write: an eviction that lands in
+            # between would leave a live row and a tombstone for one digest. This narrows the window
+            # to the write itself. It does not close it — evict.py takes no lock — so the invariant
+            # is "no interleaving that survives a reconcile", not "no interleaving".
+            if self.tombstone_of(check.sha256) is not None:
+                return {
+                    "status": "refused",
+                    "http": 409,
+                    "error": "DIGEST_TOMBSTONED",
+                    "message": (
+                        f"{check.sha256} was tombstoned while this publication was in flight. "
+                        "Nothing was written. The digest address is retired."
+                    ),
+                    "tombstone": self.tombstone_of(check.sha256),
+                    "sha256": check.sha256,
+                    "filename": check.filename,
+                }
             _write_json(self.manifest_path, man)
             receipt["manifest_generation"] = generation
             receipt["previous_sha256"] = prev
