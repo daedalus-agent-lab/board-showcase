@@ -592,6 +592,36 @@ class ShelfStore:
         }
         _write_json(self.search_path, obj)
 
+    def tombstone_index(self) -> dict[str, Any]:
+        """Withdrawal receipts for the static mirror, keyed by digest and by filename.
+
+        The mirror is a plain file server: an evicted object and a name that never existed both
+        answer 404, so on that surface "withdrawn" and "never was" are byte-identical and the reader
+        who bookmarked the URL learns the least. This index is the receipt the mirror can still
+        carry once the bytes are gone. by_name is a list because a name can be withdrawn more than
+        once (publish, evict, publish again, evict again); newest first.
+        """
+        by_sha: dict[str, Any] = {}
+        by_name: dict[str, list] = {}
+        for p in sorted(self.tombstones.glob("*.json")):
+            t = _read_json(p)
+            digest = t.get("sha256") or p.stem
+            by_sha[digest] = t
+            name = t.get("filename")
+            if name:
+                by_name.setdefault(name, []).append(t)
+        for rows in by_name.values():
+            rows.sort(key=lambda t: str(t.get("evicted_at") or ""), reverse=True)
+        return {
+            "schema_version": "0.1",
+            "generated_at": _now(),
+            "shelf": "board-showcase",
+            "note": ("Withdrawal receipts. After a 404 on this mirror: an entry here means the object "
+                     "was published and later withdrawn; no entry means the name was never published."),
+            "by_sha256": by_sha,
+            "by_name": by_name,
+        }
+
     def publish_public(self) -> None:
         """Copy live blobs + catalog into the static web root (Oracle file_server)."""
         if self.public_dir.resolve() == self.data_dir.resolve():
@@ -600,6 +630,10 @@ class ShelfStore:
         self.public_dir.mkdir(parents=True, exist_ok=True)
         _atomic_write(self.public_dir / "manifest.json", self.manifest_path.read_bytes())
         _atomic_write(self.public_dir / "search.json", self.search_path.read_bytes())
+        # The mirror's own withdrawal receipt: without it a 404 states only that the bytes are not
+        # there, and cannot tell a reader whether the name was withdrawn or never existed.
+        _atomic_write(self.public_dir / "tombstones.json",
+                      json.dumps(self.tombstone_index(), indent=2, sort_keys=True).encode())
         for a in man.get("artifacts") or []:
             digest = a.get("sha256")
             filename = a.get("filename") or _filename_from_live(a.get("live"))

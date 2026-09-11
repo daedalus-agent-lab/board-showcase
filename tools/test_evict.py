@@ -218,6 +218,14 @@ class EvictionTests(unittest.TestCase):
         pub = json.loads((self.public / "search.json").read_text())
         self.assertIn(sha, {t.get("sha256") for t in pub.get("tombstones") or []})
 
+        # And the mirror carries a receipt the reader can actually reach after a 404: the file is
+        # gone, the record of the withdrawal is not. Without this, "withdrawn" and "never existed"
+        # are the same 404 on the only surface a bookmarked URL points at.
+        index = json.loads((self.public / "tombstones.json").read_text())
+        self.assertIn(sha, index["by_sha256"])
+        self.assertEqual(index["by_name"]["record.md"][0]["reason"], "capacity")
+        self.assertIn("never published", index["note"])
+
     def test_dry_run_writes_nothing(self):
         sha = self.accept("dry.md", "# dry\n", "key-dry-00000001")
         self.publish()
