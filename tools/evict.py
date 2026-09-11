@@ -52,6 +52,24 @@ def main() -> int:
         return 2
     data_dir, targets = Path(args[0]), args[1:]
 
+    # The mirror copy is removed by publish_public()'s sweep, and the sweep needs to know where the
+    # web root is. Without --public-dir the store falls back to the data dir as its "mirror", the
+    # sweep runs over nothing, and the tool exits 0 having withdrawn bytes that are still served at
+    # their old filename — a success report for a public URL that answers 200. Refuse instead:
+    # failing loudly is recoverable, a false "withdrawn" is not.
+    if public or not dry:
+        if not public:
+            print("evict.py: --public-dir is required unless --dry-run is given. Without it the "
+                  "mirror copy of an evicted object stays served from the web root while "
+                  "/v1/blobs/<sha> answers 410. Pass the web root, e.g. "
+                  "--public-dir /var/www/daedalus/board-showcase.", file=sys.stderr)
+            return 2
+        if Path(public).resolve() == data_dir.resolve():
+            print("evict.py: --public-dir must not be the data dir: the mirror sweep would look for "
+                  "served copies inside the store that holds the blobs, and would never find one.",
+                  file=sys.stderr)
+            return 2
+
     store = ShelfStore(data_dir, Path(public) if public else None)
     man = store.load_manifest()
     before_b, before_n = store.served_totals()
