@@ -440,6 +440,49 @@ def check(surface, rep: Report, *, limit: int | None = None, strict: bool = Fals
                 FAIL if bad else PASS,
                 "; ".join(bad[:5]) + (f" (+{len(bad) - 5} more)" if len(bad) > 5 else "")
                 or "each entry re-derived from receipts, catalog and tombstones")
+    # A4: a catalog row that says how it can be checked. Four admitted shapes: content-addressed
+    # (digest + bytes, which is what the rest of this check is about), external-only (a `live` URL,
+    # checkable by fetching it), declared (values someone else asserted, with provenance, and which
+    # this shelf does not vouch for), and nothing at all — failing in strict, because such a row
+    # claims membership in a catalog whose purpose is to say what is served while giving a reader no
+    # way to check it. Also fails a row whose own note promises evidence the row does not carry,
+    # which is worse than silence: it reads as a pointer and resolves to nothing.
+    rows_all = man.get("artifacts") or []
+    with_bytes = [r for r in rows_all if r.get("bytes") is not None]
+    external = [r for r in rows_all if r.get("bytes") is None and r.get("live")]
+    declared = [r for r in rows_all
+                if r.get("bytes") is None and not r.get("live")
+                and (r.get("sha256_declared") or r.get("bytes_declared"))]
+    provenance_only = [r for r in rows_all
+                       if r.get("bytes") is None and not r.get("live")
+                       and not (r.get("sha256_declared") or r.get("bytes_declared"))
+                       and (r.get("provenance") or {})]
+    empty = [r for r in rows_all
+             if r.get("bytes") is None and not r.get("live")
+             and not (r.get("sha256_declared") or r.get("bytes_declared"))
+             and not (r.get("provenance") or {})]
+    promised_url_missing = [r for r in rows_all
+                            if not r.get("live") and r.get("bytes") is None
+                            and "live url" in str(r.get("note", "")).lower()]
+    detail = (f"{len(with_bytes)} content-addressed, {len(external)} external-only (fetched, not "
+              f"hashed), {len(declared)} declared (provenance only, nothing witnessed)")
+    if provenance_only:
+        # Not a failure: the row says where the claim came from, which is a check a reader can run,
+        # even though this shelf serves nothing for it. The distinction from `empty` is the whole
+        # point — the first version of this rule failed the row below and the repair to its note was
+        # rejected by the invariant that found it.
+        detail += (f"; {len(provenance_only)} records a claim without content, with provenance: "
+                   + "; ".join(repr(r.get("name") or r.get("filename") or "row")
+                               for r in provenance_only[:3]))
+    if empty:
+        detail += (f"; {len(empty)} assert nothing at all: "
+                   + "; ".join(repr(r.get("name") or r.get("filename") or "row") for r in empty[:3]))
+    if promised_url_missing:
+        detail += ("; a row's note promises a live URL the row does not carry: "
+                   + "; ".join(repr(r.get("name") or r.get("filename") or "row")
+                               for r in promised_url_missing[:3]))
+    rep.add("A4 every catalog row says how it can be checked",
+            FAIL if (strict and (empty or promised_url_missing)) else PASS, detail)
 
     # A2: the mirror's own withdrawal index must carry every tombstone.
     index = surface.mirror_index()
