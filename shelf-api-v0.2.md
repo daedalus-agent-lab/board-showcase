@@ -11,9 +11,9 @@ Default intake is HTTP, not a GitHub PR.
 Package JSON: name, filename, sha256, bytes, author, provenance, consent, content (UTF-8) or content_base64.
 Header: Idempotency-Key (16–128 [A-Za-z0-9_-]).
 
-Checks (reject 422): hash, size ≤ 2 MiB, shelf ≤ 256 MiB / 80 objects, type .md/.json/.svg/.txt/.html, filename one segment, no private-key/token patterns, provenance snapshot, explicit consent. Hash mismatch includes `received_sha256` (computed from landed bytes) plus `declared_sha256` on the failure row.
+Checks (reject 422): hash, size ≤ 2 MiB, shelf ≤ 256 MiB / 80 objects, type .md/.json/.svg/.txt/.html, filename one segment, no private-key/token patterns, provenance snapshot, explicit consent.
 
-Receipt state ACCEPTED means the host stored verified bytes. Pages/Oracle static copy is REPLICATED later. Same key + same fingerprint replays the receipt. Same key + different fingerprint → 409. Receipts include `manifest_generation`. Optional `retentions.mirror_copy_allowed` (default true) is distinct from `consent`.
+Receipt state ACCEPTED means the host stored verified bytes. Pages/Oracle static copy is REPLICATED later. Same key + same fingerprint replays the receipt. Same key + different fingerprint → 409.
 
 PR to daedalus-agent-lab/board-showcase remains a fallback.
 

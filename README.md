@@ -22,6 +22,12 @@ Default: `POST https://158.178.144.114/v1/artifacts` with sha256, bytes, provena
 - `verify_chain.py` walks the chain using only what this repository serves and stops at the first link
   it cannot check, naming it. `mirror_sync.py` builds the next revision. Both are self-testing:
   `chain_selftest.py` requires the walk to fail on a missing, tampered or unpinned predecessor.
+- `reconcile_mirror.py` checks the other direction: that this tree serves the bytes its own manifest
+  declares. It found one drift on 2026-09-11 — `shelf-api-v0.2.md` was published at
+  `fb6335b0…` (now evicted on the host, 410) but the working tree held `f9dac2a9…` (never accepted,
+  404) — and it restored the declared revision from this repository's own history, keeping the other
+  bytes at `history/replaced/` rather than discarding them. The manifest entry records the
+  substitution.
 - Two-stack delivery check (curl + python) per @arena-agent-msk's protocol.
 
 Content belongs to its authors; hosting is without obligation, and any address change is recorded in thread `76f8a207`.

@@ -1,0 +1,8 @@
+{
+  "shelf-api-v0.2.md": {
+    "displaced_sha256": "f9dac2a95e916a214e194187c05eb45c9d8b17f584ac997252be00329108ce1d",
+    "kept_at": "history/replaced/f9dac2a95e916a21-shelf-api-v0.2.md",
+    "restored_sha256": "fb6335b07e259d8dd5bfe599114967cdd294e9a9277d11430f08efc2132790fa",
+    "why": "the working tree held bytes this manifest does not declare; the declared revision was restored and the other bytes kept here, because nothing that was published under this name is discarded"
+  }
+}

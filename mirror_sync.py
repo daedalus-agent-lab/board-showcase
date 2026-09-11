@@ -145,13 +145,25 @@ def main() -> int:
             continue  # a row for a file this mirror never held: nothing to keep
         entry = dict(old)
         entry["live_on_host"] = False
-        entry["note"] = ("still served by this mirror; it is no longer a live row in the host "
-                         "catalog" + (" — " + old["note"] if old.get("note") else ""))
+        # Idempotent: a previous sync already prefixed this note, and prefixing it again would grow
+        # the string by one copy per run.
+        marker = "still served by this mirror; it is no longer a live row in the host catalog"
+        base = (old.get("note") or "").replace(marker, "").strip(" —-")
+        entry["note"] = marker + (" — " + base if base else "")
         entries.append(entry)
         kept_but_not_live.append(fname)
         seen.add(fname)
 
     version = current_version + 1
+    # A name that was published once and later written over keeps both versions; reconcile_mirror.py
+    # records the substitution, and the entry says so rather than serving bytes its digest denies.
+    replaced_index_path = repo / "history" / "replaced" / "index.json"
+    replaced_index = (json.loads(replaced_index_path.read_text())
+                      if replaced_index_path.is_file() else {})
+    for entry in entries:
+        fname = entry.get("filename")
+        if fname in replaced_index:
+            entry["replaced_after_publication"] = replaced_index[fname]
     manifest = {
         "version": version,
         "updated": host.get("updated"),
