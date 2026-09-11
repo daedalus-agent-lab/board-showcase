@@ -210,6 +210,47 @@ class AgreementTests(unittest.TestCase):
         self.assertNotEqual(code, 0, out)
         self.assertIn("UNKNOWN", out)
 
+    def test_unexpected_agreement_endpoint_shape_is_unknown_not_zero(self):
+        """A missing key must not be read as 'no orphans': that is how a live report said 0 while
+        the shelf served 16 uncounted blobs. The parse is exercised against a stub server."""
+        import http.server
+        import threading
+
+        class Stub(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802
+                if self.path == "/mirror/manifest.json":
+                    body = json.dumps({"artifacts": []}).encode()
+                elif self.path == "/mirror/tombstones.json":
+                    body = json.dumps({"by_sha256": {}, "by_name": {}}).encode()
+                elif self.path == "/api/v1/shelf/agreement":
+                    body = json.dumps({"orphans": {"meaning": "no count field here"}}).encode()
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):  # silence
+                pass
+
+        srv = http.server.HTTPServer(("127.0.0.1", 0), Stub)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            base = f"http://127.0.0.1:{srv.server_port}"
+            r = subprocess.run([sys.executable, str(CHECK), "--api", f"{base}/api",
+                                "--mirror", f"{base}/mirror"],
+                               capture_output=True, text=True, timeout=180)
+        finally:
+            srv.shutdown()
+        out = r.stdout + r.stderr
+        self.assertIn("A1 served but uncounted", out)
+        self.assertIn("UNKNOWN", out)
+        self.assertNotIn("0 blob(s), 0 bytes", out)
+
     def test_missing_data_directory_is_not_a_pass(self):
         cmd = [sys.executable, str(CHECK), "--data", str(Path(self.tmp.name) / "nope")]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)

@@ -310,19 +310,24 @@ def check(surface, rep: Report, *, limit: int | None = None, strict: bool = Fals
             rep.add("A1 served but uncounted", FAIL if (strict and n) else PASS,
                     f"{n} blob(s), {b} bytes (no live row, no tombstone)")
     else:
-        code, body = surface._get(f"{surface.api}/v1/shelf/orphans")
-        if code == 200:
+        code, body = surface._get(f"{surface.api}/v1/shelf/agreement")
+        if code != 200:
+            rep.add("A1 served but uncounted", UNKNOWN,
+                    f"no agreement endpoint on the live API (-> {code}); "
+                    "reported offline by evict.py on the host instead")
+        else:
             try:
-                o = json.loads(body)
-                b, n = int(o.get("bytes", 0)), int(o.get("count", 0))
+                o = json.loads(body)["orphans"]
+                b, n = int(o["bytes"]), int(o["count"])
+            except Exception as e:  # noqa: BLE001
+                # Fail closed on a shape change: an unparsable answer must never read as zero
+                # orphans, which is what a missing key plus a default silently reported once.
+                rep.add("A1 served but uncounted", UNKNOWN,
+                        f"agreement endpoint returned an unexpected shape ({e}); "
+                        "counted as unknown rather than as zero")
+            else:
                 rep.add("A1 served but uncounted", FAIL if (strict and n) else PASS,
                         f"{n} blob(s), {b} bytes (no live row, no tombstone)")
-            except Exception:  # noqa: BLE001
-                rep.add("A1 served but uncounted", UNKNOWN, "endpoint returned unparsable body")
-        else:
-            rep.add("A1 served but uncounted", UNKNOWN,
-                    f"no orphan endpoint on the live API (-> {code}); "
-                    "reported by evict.py on the host instead")
     return rep
 
 
