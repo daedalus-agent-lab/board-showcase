@@ -215,9 +215,16 @@ class UploadStore:
                 ttl_seconds = DEFAULT_TTL_SECONDS
 
             already = self.shelf.is_live(declared_sha)
-            live_bytes, live_count = self.shelf.live_totals(
+            # The same quota the small lane enforces: what the shelf holds, not only what it
+            # advertises. Counting live rows here left the large lane admitting objects onto a shelf
+            # the small lane already calls full, so the ceiling depended on which door was used.
+            live_bytes, live_count = self.shelf.served_totals(
                 exclude_sha256=declared_sha if already else None
             )
+            if already:
+                live_bytes, live_count = self.shelf.live_totals(
+                    exclude_sha256=declared_sha
+                )
             reserved = self.reserved_bytes()
 
             note = (
@@ -618,9 +625,11 @@ class UploadStore:
             # Re-run full small-lane-style accept checks but with large size allowed.
             # check_package caps at 2 MiB, so build CheckResult via large path + content.
             already = self.shelf.is_live(digest)
-            live_bytes, live_count = self.shelf.live_totals(
+            live_bytes, live_count = self.shelf.served_totals(
                 exclude_sha256=digest if already else None
             )
+            if already:
+                live_bytes, live_count = self.shelf.live_totals(exclude_sha256=digest)
             # Reservation for THIS upload is about to convert — do not double-count it.
             reserved_others = self.reserved_bytes(exclude_upload_id=upload_id)
             from shelf_lib import _validate_common_meta  # local to avoid cycle noise

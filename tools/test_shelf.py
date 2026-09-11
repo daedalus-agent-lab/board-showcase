@@ -641,6 +641,149 @@ class UploadTests(unittest.TestCase):
         )
         self.assertEqual(res["http"], 422)
 
+    def test_the_small_lane_also_enforces_against_what_the_shelf_holds(self):
+        """The other door, exercised rather than assumed.
+
+        ed7024f moved small-lane enforcement from live_totals to served_totals, and with that moved
+        back not one test failed: the claim that the quota counts superseded bytes rested on reading
+        the diff. Here a real POST goes through the handler against a temp store whose live count is
+        one below the ceiling and whose served count is at it, so the two numbers give opposite
+        answers and the response says which one was used.
+        """
+        import importlib
+        import json as _json
+        import os
+        import threading
+        import urllib.error
+        import urllib.request
+        from http.server import HTTPServer
+
+        from shelf_lib import MAX_LIVE_OBJECTS
+
+        root = Path(self.tmp.name) / "api"
+        os.environ["SHELF_DATA"] = str(root / "data")
+        os.environ["SHELF_PUBLIC"] = str(root / "public")
+        api = importlib.import_module("shelf_api")
+        importlib.reload(api)
+
+        # Fill to MAX_LIVE_OBJECTS - 1 live rows, then supersede one so a served-but-not-live blob
+        # exists: live = N-1 (room for one more), served = N (full).
+        for i in range(MAX_LIVE_OBJECTS - 1):
+            b = f"# filler {i}\n".encode()
+            c = check_package(
+                content=b, declared_sha256=sha256_hex(b), declared_bytes=len(b),
+                name=f"card f{i}.md", filename=f"f{i}.md",
+                provenance={"thread": "8246bf16-1f79-466c-b757-0d011c414fdb"},
+                author="tester", consent="Host this file on the board-showcase shelf.",
+                principal="tester-agent", shelf_live_bytes=0, shelf_live_count=0,
+                idempotency_key=f"key-fill{i:04d}-0001")
+            api.STORE.accept(content=b, check=c, principal="tester-agent",
+                             idempotency_key=f"key-fill{i:04d}-0001")
+        b = b"# filler 0 replaced\n"
+        c = check_package(
+            content=b, declared_sha256=sha256_hex(b), declared_bytes=len(b),
+            name="card f0.md", filename="f0.md",
+            provenance={"thread": "8246bf16-1f79-466c-b757-0d011c414fdb"},
+            author="tester", consent="Host this file on the board-showcase shelf.",
+            principal="tester-agent", shelf_live_bytes=0, shelf_live_count=0,
+            idempotency_key="key-fillrep-0001")
+        api.STORE.accept(content=b, check=c, principal="tester-agent",
+                         idempotency_key="key-fillrep-0001")
+
+        live_n = api.STORE.live_totals()[1]
+        served_n = api.STORE.served_totals()[1]
+        self.assertEqual(live_n, MAX_LIVE_OBJECTS - 1, "fixture: live has room for one more")
+        self.assertEqual(served_n, MAX_LIVE_OBJECTS, "fixture: served is at the ceiling")
+
+        srv = HTTPServer(("127.0.0.1", 0), api.Handler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            body = b"# one more\n"
+            payload = _json.dumps({
+                "sha256": sha256_hex(body), "bytes": len(body),
+                "name": "one more", "filename": "one-more.md",
+                "provenance": {"thread": "8246bf16-1f79-466c-b757-0d011c414fdb"},
+                "author": "tester",
+                "consent": "Host this file on the board-showcase shelf.",
+                "content": body.decode(),
+            }).encode()
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{srv.server_port}/v1/artifacts", data=payload,
+                headers={"Content-Type": "application/json",
+                         "Idempotency-Key": "key-onemore-000001"})
+            try:
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    code, answer = r.status, r.read()
+            except urllib.error.HTTPError as e:
+                code, answer = e.code, e.read()
+        finally:
+            srv.shutdown()
+
+        text = answer.decode("utf-8", "replace")
+        self.assertNotIn("201", str(code),
+                         "the small lane admitted an object onto a shelf that is already full once "
+                         "the bytes it serves without a live row are counted")
+        self.assertIn("quota", text.lower(),
+                      f"expected a quota refusal, got {code}: {text[:200]}")
+        self.assertIn(str(MAX_LIVE_OBJECTS), text,
+                      "the refusal was decided on the live-row count, not on what the shelf holds")
+
+    def test_both_lanes_enforce_the_quota_against_what_the_shelf_holds(self):
+        """One shelf, one ceiling. The large lane counted live rows while the small lane counted
+        everything served, so a shelf the small lane calls full stayed open through the other door —
+        and the bytes that made it full were exactly the ones the large lane could not see.
+
+        Checked without uploading 2 MiB: the two lanes are asked what number they enforce against,
+        by filling the shelf until served and live differ and reading the count each door uses.
+        """
+        from shelf_lib import MAX_LIVE_OBJECTS, sha256_hex
+
+        # Two rows under one name: one live row, one superseded blob still served.
+        for i, body in enumerate((b"# first\n", b"# second\n")):
+            c = check_package(
+                content=body, declared_sha256=sha256_hex(body), declared_bytes=len(body),
+                name="card q.md", filename="q.md",
+                provenance={"thread": "8246bf16-1f79-466c-b757-0d011c414fdb"},
+                author="tester", consent="Host this file on the board-showcase shelf.",
+                principal="tester-agent", shelf_live_bytes=0, shelf_live_count=0,
+                idempotency_key=f"key-quota-0000000{i}")
+            self.store.accept(content=body, check=c, principal="tester-agent",
+                              idempotency_key=f"key-quota-0000000{i}")
+
+        live_b, live_n = self.store.live_totals()
+        served_b, served_n = self.store.served_totals()
+        self.assertEqual(served_n, live_n + 1, "fixture: one blob is served without a live row")
+
+        # What the large lane hands to the quota check, read from the lane itself.
+        seen = {}
+        real = self.store.served_totals
+        real_live = self.store.live_totals
+
+        def spy_served(*a, **k):
+            seen["served"] = True
+            return real(*a, **k)
+
+        def spy_live(*a, **k):
+            seen.setdefault("live", True)
+            return real_live(*a, **k)
+
+        self.store.served_totals = spy_served       # type: ignore[method-assign]
+        self.store.live_totals = spy_live           # type: ignore[method-assign]
+        try:
+            body = self._large_body(3 * 1024 * 1024)
+            self.uploads.init_upload(
+                meta_body=self._init_meta(body),
+                principal="tester-agent",
+                idempotency_key="test-idempotency-key-q001")
+        finally:
+            self.store.served_totals = real         # type: ignore[method-assign]
+            self.store.live_totals = real_live      # type: ignore[method-assign]
+
+        self.assertTrue(seen.get("served"),
+                        "the large lane enforces the quota against live rows only, so it admits "
+                        "objects onto a shelf the small lane already calls full")
+        self.assertLessEqual(served_n, MAX_LIVE_OBJECTS)
+
     def test_init_replay_and_conflict(self):
         from shelf_lib import MAX_OBJECT_BYTES
 

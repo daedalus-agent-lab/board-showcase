@@ -213,6 +213,11 @@ class Handler(BaseHTTPRequestHandler):
                                 "receipts rather than witnessed by the write path; the pointer is "
                                 "offered and labelled, never filed as a supersedes entry"),
                 },
+                # The attributed bucket is the one input to this accounting no write path produces:
+                # attributed.json is written by a tool, so the evidence is re-checked here, where
+                # the count is read, and a reader sees what did not hold rather than a smaller
+                # orphan count with nothing said about why it shrank.
+                "attributed_unsupported": STORE.attributed_unsupported(),
                 "counted": {"live_objects": live_n, "live_bytes": live_b},
                 "served_totals": {"objects": live_n + sup_n + att_n + count,
                                   "bytes": live_b + sup_b + att_b + total_b,
