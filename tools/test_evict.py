@@ -160,15 +160,16 @@ class EvictionTests(unittest.TestCase):
 
     # ---------------------------------------------------------------- supersede / orphans
 
-    def test_supersede_leaves_the_old_bytes_labelled_orphan_not_live(self):
+    def test_supersede_leaves_the_old_bytes_labelled_superseded_not_live(self):
         """Re-publishing under one filename replaces the row; the old digest is not 'live'.
 
-        Measured behaviour, worth pinning: lookup answers 200 with state orphan_blob, naming it a GC
-        candidate, while the catalog counts only the surviving row.
+        Measured behaviour, worth pinning: lookup answers 200 with state `superseded`, naming what
+        displaced it, while the catalog counts only the surviving row. The earlier version of this
+        test pinned `orphan_blob` — the same bytes under a word that said nothing explains them,
+        which is what made a property test flag every replacement as residue.
 
-        KNOWN GAP (named here, not hidden): `live_totals()` counts manifest rows, so bytes the shelf
-        still serves as an orphan are invisible to the shelf's own quota. Repeatedly superseding one
-        filename therefore grows the disk without moving the quota counters.
+        Closed gap: the shelf quota reads `served_totals()` = live + superseded + orphans, so bytes
+        it still serves can no longer be invisible to the number that bounds the disk.
         """
         old = self.accept("same.md", "# old\n", "key-supersede-000001")
         new = self.accept("same.md", "# new\n", "key-supersede-000002")
@@ -181,21 +182,27 @@ class EvictionTests(unittest.TestCase):
 
         code, body = self.store.lookup_sha256(old)
         self.assertEqual(code, 200)
-        self.assertEqual(body["state"], "orphan_blob", body)
+        self.assertEqual(body["state"], "superseded", body)
         self.assertIsNotNone(self.store.get_blob(old), "superseded bytes must stay served")
+        sup_b, sup_n = self.store.superseded_totals()
+        self.assertEqual(sup_n, 1, "the replacement names one blob; the quota must see it")
+        self.assertEqual(sup_b, len(b"# old\n"))
+        live_b, live_n = self.store.live_totals()
+        served_b, served_n = self.store.served_totals()
+        self.assertEqual(served_n, live_n + sup_n, "no served blob may fall between the buckets")
 
-        # The gap, stated as an assertion so it is visible when someone closes it.
+        # The old digest is not a live row — but it is not invisible either.
         counted = {a["sha256"] for a in self.manifest()["artifacts"]}
-        self.assertNotIn(old, counted, "if orphans now count toward quota, update this test")
+        self.assertNotIn(old, counted)
         self.assertEqual((self.public / "same.md").read_bytes(), b"# new\n")
 
-        # What the tool must not hide: the served-but-uncounted bytes, named in its own summary.
-        self.assertEqual(self.store.orphan_totals(), (len(b"# old\n"), 1))
-        r = self.evict(old)
-        self.assertIn("served but uncounted", r.stdout)
-        self.assertIn("1 blob(s)", r.stdout)
-        self.assertEqual(self.store.orphan_totals(), (len(b"# old\n"), 1),
-                         "reporting an orphan must not change the count")
+        # The tool must name served bytes in the bucket they belong to, and must not call a replaced
+        # object an orphan: that word is what made the gap invisible in the first place.
+        self.assertEqual(self.store.superseded_totals(), (len(b"# old\n"), 1))
+        self.assertEqual(self.store.orphan_totals(), (0, 0))
+        r = self.evict(new)
+        self.assertIn("served with a replacement receipt", r.stdout)
+        self.assertEqual(self.store.served_totals()[1], 1, "the evicted row is no longer served")
 
     # ---------------------------------------------------------------- the mirror is a projection
 
@@ -258,7 +265,7 @@ class EvictionTests(unittest.TestCase):
 
         code, body = self.store.lookup_sha256(old)
         self.assertEqual(code, 200, "a superseded object is still served, not withdrawn")
-        self.assertEqual(body["state"], "orphan_blob")
+        self.assertEqual(body["state"], "superseded")
         self.assertEqual(body["superseded_by"]["superseded_by"], new)
 
         index = json.loads((self.public / "tombstones.json").read_text())
@@ -279,6 +286,30 @@ class EvictionTests(unittest.TestCase):
 
 
     # ---------------------------------------------------------------- the record
+
+    def test_a_stale_copy_of_a_withdrawn_name_is_swept_even_if_publish_died(self):
+        """The stale-read half of the defect, reachable by a crash: eviction writes the tombstone,
+        then dies before republishing, and the copy stays served at 200 — the reader gets a live
+        answer for a withdrawn object and no receipt anywhere in the response. The tombstone itself
+        is the second warrant to remove it."""
+        self.accept("crashed.md", "# crashed\n", "key-crashed0000001")
+        self.publish()
+        sha = json.loads((self.data / "manifest.json").read_text())["artifacts"][0]["sha256"]
+        # Evict by hand, the way a tool that dies after its first step would leave things: receipt
+        # written, manifest row dropped, copy still in the web root, nothing republished.
+        (self.data / "tombstones").mkdir(exist_ok=True)
+        (self.data / "tombstones" / f"{sha}.json").write_text(json.dumps(
+            {"sha256": sha, "state": "evicted", "filename": "crashed.md",
+             "evicted_at": "2026-01-01T00:00:00Z", "reason": "capacity"}))
+        man = json.loads((self.data / "manifest.json").read_text())
+        man["artifacts"] = []
+        (self.data / "manifest.json").write_text(json.dumps(man))
+        self.assertTrue((self.public / "crashed.md").is_file())
+
+        swept = self.store.publish_public()
+
+        self.assertIn("crashed.md", swept)
+        self.assertFalse((self.public / "crashed.md").exists())
 
     def test_the_tombstone_receipt_on_the_mirror_is_regenerated_not_appended(self):
         """The fork: is the mirror's receipt a projection or a second write surface?

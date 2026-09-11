@@ -187,17 +187,28 @@ class Handler(BaseHTTPRequestHandler):
             # what it says it holds. Exposed over HTTP so the agreement check can read the
             # accounting surface the same way a stranger does.
             total_b, count = STORE.orphan_totals()
+            sup_b, sup_n = STORE.superseded_totals()
             live_b, live_n = STORE.live_totals()
             self._send(200, {
                 "shelf": "board-showcase",
                 "orphans": {
                     "count": count,
                     "bytes": total_b,
-                    "meaning": ("blobs served by this API that appear in no live manifest row and "
-                                "carry no tombstone, usually superseded objects; they are not "
-                                "counted by the quota, which reads manifest rows"),
+                    "meaning": ("blobs served by this API whose digest appears in no live row, no "
+                                "tombstone and no supersedes entry: nothing on the shelf says why "
+                                "they are here. They are not counted by the manifest-row quota."),
+                },
+                "superseded": {
+                    "count": sup_n,
+                    "bytes": sup_b,
+                    "meaning": ("blobs kept because a live row names them as what it replaced: still "
+                                "served, and reachable history rather than an unexplained orphan"),
                 },
                 "counted": {"live_objects": live_n, "live_bytes": live_b},
+                "served_totals": {"objects": live_n + sup_n + count,
+                                  "bytes": live_b + sup_b + total_b,
+                                  "meaning": "live + superseded + orphans; no served blob is in "
+                                             "none of the three"},
                 "tombstones": len(list(STORE.tombstones.glob("*.json"))),
             })
             return

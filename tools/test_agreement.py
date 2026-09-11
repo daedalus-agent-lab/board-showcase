@@ -146,10 +146,10 @@ class AgreementTests(unittest.TestCase):
 
         code, out = self.run_check()
 
-        # With no tombstone the object is simply an orphan, not a violation: the check reports it
-        # under accounting, and only --strict turns that into a failure.
+        # With no tombstone the object has no receipt at all: the check reports it under accounting,
+        # and only --strict turns that into a failure.
         self.assertEqual(code, 0, out)
-        self.assertIn("A1 served but uncounted", out)
+        self.assertIn("A1a served with no receipt at all", out)
         strict_code, strict_out = self.run_check("--strict")
         self.assertEqual(strict_code, 1, strict_out)
 
@@ -223,7 +223,8 @@ class AgreementTests(unittest.TestCase):
                 elif self.path == "/mirror/tombstones.json":
                     body = json.dumps({"by_sha256": {}, "by_name": {}}).encode()
                 elif self.path == "/api/v1/shelf/agreement":
-                    body = json.dumps({"orphans": {"meaning": "no count field here"}}).encode()
+                    body = json.dumps({"orphans": {"meaning": "no count field here"},
+                                       "superseded": {"count": 0, "bytes": 0}}).encode()
                 else:
                     self.send_response(404)
                     self.end_headers()
@@ -247,9 +248,10 @@ class AgreementTests(unittest.TestCase):
         finally:
             srv.shutdown()
         out = r.stdout + r.stderr
-        self.assertIn("A1 served but uncounted", out)
+        self.assertIn("A1a served with no receipt at all", out)
         self.assertIn("UNKNOWN", out)
-        self.assertNotIn("0 blob(s), 0 bytes", out)
+        self.assertNotIn("PASS    A1a", out,
+                         "an unparsable orphan count must not read as a passing zero")
 
     def test_a_withdrawn_object_answers_410_on_every_read_surface(self):
         """remotik's rule: withdrawal is not 'no bytes at this URL', it is one tombstone for every

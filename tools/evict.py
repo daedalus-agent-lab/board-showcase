@@ -79,12 +79,16 @@ def main() -> int:
     print(f"mirror kept (filename still live elsewhere): {mirror_kept}")
     orphans = store.orphan_totals()
     if orphans[1]:
-        # Bytes the shelf still serves but the quota counters do not see: superseded objects whose
-        # row left the manifest without a tombstone. Naming them here is the point — an eviction
-        # decision made on `live objects` alone is made on an understated number. Reported before
-        # the dry-run return, because the dry run is exactly when the decision is being made.
-        print(f"served but uncounted {orphans[1]} blob(s), {orphans[0]} bytes "
-              f"(not in manifest, no tombstone; the quota counts manifest rows only)")
+        # Bytes the shelf serves with no receipt at all: no live row, no tombstone, no supersedes
+        # entry. Naming them here is the point — an eviction decision made on `live objects` alone
+        # is made on an understated number, and an object whose digest nothing explains is the one
+        # that is genuinely unreachable later.
+        print(f"served with no receipt {orphans[1]} blob(s), {orphans[0]} bytes "
+              f"(no live row, no tombstone, no supersedes entry)")
+    sup = store.superseded_totals()
+    if sup[1]:
+        print(f"served with a replacement receipt {sup[1]} blob(s), {sup[0]} bytes "
+              f"(superseded, counted: reachable history rather than residue)")
     if dry:
         print(f"dry run: would evict {len(evicted)}, {len(missing)} not found")
         return 0

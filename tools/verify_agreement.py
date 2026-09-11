@@ -144,6 +144,14 @@ class Offline:
         except Exception:  # noqa: BLE001
             return 0, {"state": "unreadable"}
 
+    def lookup(self, digest: str) -> tuple[int, dict]:
+        """The lookup surface as the API answers it, read through the API's own code."""
+        try:
+            from shelf_store import ShelfStore
+            return ShelfStore(self.data, self.public).lookup_sha256(digest)
+        except Exception as e:  # noqa: BLE001
+            return 0, {"_unreadable": str(e)}
+
     def mirror_bytes(self, filename: str) -> bytes | None:
         return self.mirror(filename)
 
@@ -228,6 +236,13 @@ class Live:
     def mirror_miss(self, filename: str) -> tuple[int, dict]:
         """What a reader gets for a name the mirror cannot serve — the 404 and its body."""
         code, body = self._get(f"{self.mirror}/{filename}")
+        try:
+            return code, json.loads(body)
+        except Exception:  # noqa: BLE001
+            return code, {"_unparsable": body[:120].decode("utf-8", "replace")}
+
+    def lookup(self, digest: str) -> tuple[int, dict]:
+        code, body = self._get(f"{self.api}/v1/by-sha256/{digest}")
         try:
             return code, json.loads(body)
         except Exception:  # noqa: BLE001
@@ -369,6 +384,39 @@ def check(surface, rep: Report, *, limit: int | None = None, strict: bool = Fals
         rep.add("R5b the mirror's 410 carries the same tombstone, not a bare miss",
                 FAIL if same_receipt else PASS, "; ".join(same_receipt[:5]))
 
+    # S1/S2/S3: the third terminal state. A replacement is not a withdrawal, and an invariant set
+    # that names only live and evicted forces every superseded object to present as one of the two:
+    # as an orphan (it is not live) or as a lie (a 410 that contradicts the bytes still served).
+    sup_pairs = []
+    for a in man.get("artifacts") or []:
+        s = a.get("supersedes") or {}
+        if s.get("sha256"):
+            sup_pairs.append((s["sha256"], a["sha256"]))
+    sup_bad, sup_lookup = [], []
+    for old, new in sup_pairs:
+        blob = surface.blob(old)
+        if blob is None:
+            sup_bad.append(f"{old[:12]} no longer served although {new[:12]} names it as replaced")
+        elif sha256_hex(blob) != old:
+            sup_bad.append(f"{old[:12]} serves {sha256_hex(blob)[:12]}")
+        code, body = surface.lookup(old)
+        if code != 200:
+            sup_lookup.append(f"/v1/by-sha256/{old[:12]} -> {code}, not 200")
+        elif body.get("state") != "superseded":
+            sup_lookup.append(f"{old[:12]} state={body.get('state')!r}, not 'superseded'")
+        elif (body.get("superseded_by") or {}).get("superseded_by") != new:
+            sup_lookup.append(f"{old[:12]} does not name {new[:12]} as what displaced it")
+    rep.add("S1 a superseded digest is still served and still hashes to itself",
+            FAIL if sup_bad else PASS,
+            "; ".join(sup_bad[:5]) or f"{len(sup_pairs)} replacement(s) checked")
+    rep.add("S2 lookup reports superseded, with the digest that displaced it",
+            FAIL if sup_lookup else PASS, "; ".join(sup_lookup[:5]))
+    contradicted = [f"{old[:12]} has a tombstone but is served" for old, _ in sup_pairs
+                    if surface.blob_status(old) == 200
+                    and any((t.get("sha256") == old) for t in tombs)]
+    rep.add("S3 a served replacement carries no withdrawal receipt", FAIL if contradicted else PASS,
+            "; ".join(contradicted[:5]))
+
     # A2: the mirror's own withdrawal index must carry every tombstone.
     index = surface.mirror_index()
     if index is None:
@@ -379,17 +427,25 @@ def check(surface, rep: Report, *, limit: int | None = None, strict: bool = Fals
         rep.add("A2 mirror withdrawal index covers every tombstone",
                 FAIL if missing else PASS, "; ".join(m[:12] for m in missing[:5]))
 
-    # A1: served but uncounted.
+    # A1: served but uncounted. Three buckets, named so that no served blob can fall outside all of
+    # them. The pair (live + orphans) was complete only because orphan_totals happened to count
+    # superseded blobs under a name that said they had no receipt.
     if hasattr(surface, "data"):
-        totals = getattr(surface, "orphan_totals", None)
-        if totals is not None:
-            b, n = totals()
-            rep.add("A1 served but uncounted", FAIL if (strict and n) else PASS,
-                    f"{n} blob(s), {b} bytes (no live row, no tombstone)")
+        orphan_total = getattr(surface, "orphan_totals", None)
+        sup_total = getattr(surface, "superseded_totals", None)
+        if orphan_total is not None:
+            b, n = orphan_total()
+            rep.add("A1a served with no receipt at all (orphans)",
+                    FAIL if (strict and n) else PASS,
+                    f"{n} blob(s), {b} bytes (no live row, no tombstone, no supersedes entry)")
+        if sup_total is not None:
+            b, n = sup_total()
+            rep.add("A1b served and named by a replacement (superseded)", PASS,
+                    f"{n} blob(s), {b} bytes (reachable history, not residue)")
     else:
         code, body = surface._get(f"{surface.api}/v1/shelf/agreement")
         if code != 200:
-            rep.add("A1 served but uncounted", UNKNOWN,
+            rep.add("A1a served with no receipt at all (orphans)", UNKNOWN,
                     f"no agreement endpoint on the live API (-> {code}); "
                     "reported offline by evict.py on the host instead")
         else:
@@ -399,12 +455,22 @@ def check(surface, rep: Report, *, limit: int | None = None, strict: bool = Fals
             except Exception as e:  # noqa: BLE001
                 # Fail closed on a shape change: an unparsable answer must never read as zero
                 # orphans, which is what a missing key plus a default silently reported once.
-                rep.add("A1 served but uncounted", UNKNOWN,
+                rep.add("A1a served with no receipt at all (orphans)", UNKNOWN,
                         f"agreement endpoint returned an unexpected shape ({e}); "
                         "counted as unknown rather than as zero")
             else:
-                rep.add("A1 served but uncounted", FAIL if (strict and n) else PASS,
-                        f"{n} blob(s), {b} bytes (no live row, no tombstone)")
+                rep.add("A1a served with no receipt at all (orphans)",
+                        FAIL if (strict and n) else PASS,
+                        f"{n} blob(s), {b} bytes (no live row, no tombstone, no supersedes entry)")
+            try:
+                s = json.loads(body)["superseded"]
+                sb, sn = int(s["bytes"]), int(s["count"])
+            except Exception as e:  # noqa: BLE001
+                rep.add("A1b served and named by a replacement (superseded)", UNKNOWN,
+                        f"agreement endpoint returned an unexpected shape ({e})")
+            else:
+                rep.add("A1b served and named by a replacement (superseded)", PASS,
+                        f"{sn} blob(s), {sb} bytes (reachable history, not residue)")
     return rep
 
 

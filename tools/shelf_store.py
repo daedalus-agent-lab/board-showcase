@@ -126,23 +126,52 @@ class ShelfStore:
                 return True
         return False
 
-    def orphan_totals(self) -> tuple[int, int]:
-        """(bytes, count) of blobs that are served but appear in no manifest row and no tombstone.
+    def superseded_digests(self) -> dict[str, dict[str, Any]]:
+        """Digests displaced under a name that is still served, keyed by the displaced digest.
 
-        These are superseded objects: accepting a new artifact under an existing filename replaces
-        the older row, and nothing writes a tombstone for the digest it displaced. The bytes stay
-        served at /v1/blobs/<sha> and are labelled orphan_blob by lookup, while live_totals() — and
-        therefore the shelf quota — counts manifest rows only. Reporting them here keeps an
-        eviction decision from being made on a number that excludes part of what the shelf serves.
+        A replacement is not a withdrawal: the old bytes stay served and the reader who holds the old
+        digest learns which object took its name. That receipt is what separates these blobs from an
+        orphan — both are served and neither is live, but only one of them is reachable history.
+        """
+        out: dict[str, dict[str, Any]] = {}
+        for a in self.load_manifest().get("artifacts") or []:
+            sup = a.get("supersedes") or {}
+            old = sup.get("sha256")
+            if old and old != a.get("sha256"):
+                out[old] = {"superseded_by": a.get("sha256"),
+                            "filename": sup.get("filename"),
+                            "reason": sup.get("reason"), "at": sup.get("at")}
+        return out
+
+    def orphan_totals(self) -> tuple[int, int]:
+        """(bytes, count) of served blobs with **no receipt at all** — the defining property.
+
+        An orphan is not "a blob that is no longer live": a superseded blob is also no longer live
+        and it carries a receipt naming what displaced it, so it is reachable history. An orphan is
+        served bytes whose digest appears in no live row and no tombstone *and* in no supersedes
+        entry — nothing on the shelf says why it is there. Counting the two together made the
+        absence of evidence look like a finding.
         """
         man = self.load_manifest()
         live = {a.get("sha256") for a in man.get("artifacts") or [] if a.get("bytes") is not None}
+        recounted = set(self.superseded_digests())
         total_b = count = 0
         for p in sorted(self.blobs.glob("*")):
-            if not p.is_file() or p.name in live or self.tombstone_of(p.name):
+            if not p.is_file() or p.name in live or p.name in recounted or self.tombstone_of(p.name):
                 continue
             total_b += p.stat().st_size
             count += 1
+        return total_b, count
+
+    def superseded_totals(self) -> tuple[int, int]:
+        """(bytes, count) of blobs kept because a replacement names them."""
+        recounted = self.superseded_digests()
+        total_b = count = 0
+        for digest in sorted(recounted):
+            p = self.blobs / digest
+            if p.is_file():
+                total_b += p.stat().st_size
+                count += 1
         return total_b, count
 
     def tombstone_of(self, sha256: str) -> dict[str, Any] | None:
@@ -365,6 +394,11 @@ class ShelfStore:
                 "note": "bytes staged, not in live manifest (GC candidate)",
             }
             if sup:
+                # Not an orphan: a third terminal state with its own truth table. The bytes are
+                # served (200, not 410), and the name it was published under is now served by a
+                # newer object. Calling this an orphan made reachable history look like unexplained
+                # residue, and a reader who held the old digest had no way to tell the two apart.
+                body["state"] = "superseded"
                 body["superseded_by"] = sup
                 body["note"] = ("bytes retained; the name this object was published under is now "
                                 "served by a newer object — see superseded_by")
@@ -393,10 +427,16 @@ class ShelfStore:
             if row:
                 filename = row.get("filename")
         ctype = _content_type(filename or "")
+        if self.is_live(sha256):
+            state = "live"
+        elif self.superseded_digests().get(sha256):
+            state = "superseded"
+        else:
+            state = "orphan_blob"
         return (
             200,
             {
-                "state": "live" if self.is_live(sha256) else "orphan_blob",
+                "state": state,
                 "sha256": sha256,
                 "bytes": size,
                 "filename": filename,
@@ -701,15 +741,17 @@ class ShelfStore:
         }
 
     def served_totals(self, exclude_sha256: str | None = None) -> tuple[int, int]:
-        """(bytes, count) of everything this shelf actually serves: live rows plus orphans.
+        """(bytes, count) of everything this shelf serves: live rows + superseded + orphans.
 
-        The quota is enforced against what the shelf holds, not only what it advertises: the two
-        numbers differ by the superseded objects, and enforcing the smaller one lets the disk grow
-        while the counter stands still.
+        The quota is enforced against what the shelf holds, not only what it advertises. All three
+        buckets are named here so no served blob can fall between them: the previous pair (live +
+        orphans) was complete only by accident, because orphan_totals happened to count superseded
+        blobs under a name that said they had no receipt.
         """
         live_b, live_n = self.live_totals(exclude_sha256=exclude_sha256)
+        sup_b, sup_n = self.superseded_totals()
         orphan_b, orphan_n = self.orphan_totals()
-        return live_b + orphan_b, live_n + orphan_n
+        return live_b + sup_b + orphan_b, live_n + sup_n + orphan_n
 
     def publish_public(self, sweep_foreign: bool = False) -> list[str]:
         """Write the mirror as a projection of the catalog, and return stale names removed.
@@ -744,6 +786,13 @@ class ShelfStore:
                 prev = {str(n) for n in (_read_json(published).get("files") or [])}
             except Exception:  # noqa: BLE001
                 prev = set()
+        # A second, independent warrant: a name that carries a withdrawal receipt was served here by
+        # us, whatever the last published.json says. Without this, an eviction that wrote its
+        # tombstone and then died before republishing leaves the copy served at 200 — the stale-read
+        # half of the same defect, reachable by a crash rather than by a missing code path.
+        withdrawn_names = set()
+        for t in self.tombstone_index().get("by_name") or {}:
+            withdrawn_names.add(str(t))
         _atomic_write(self.public_dir / "manifest.json", self.manifest_path.read_bytes())
         _atomic_write(self.public_dir / "search.json", self.search_path.read_bytes())
         # The mirror's own withdrawal receipt: without it a 404 states only that the bytes are not
@@ -769,7 +818,7 @@ class ShelfStore:
         for p in sorted(self.public_dir.iterdir()):
             if not p.is_file() or p.name in wrote or p.name in keep:
                 continue
-            if p.name in prev or sweep_foreign:
+            if p.name in prev or p.name in withdrawn_names or sweep_foreign:
                 removed.append(p.name)
                 p.unlink()
             else:
