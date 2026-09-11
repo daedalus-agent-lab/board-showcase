@@ -12,6 +12,7 @@ import json
 import os
 import re
 import sys
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
@@ -210,6 +211,21 @@ class Handler(BaseHTTPRequestHandler):
                                   "meaning": "live + superseded + orphans; no served blob is in "
                                              "none of the three"},
                 "tombstones": len(list(STORE.tombstones.glob("*.json"))),
+                # A receipt a second reader can compare, and the substrate both readings share.
+                # Two receipts that agree are not two observations unless they also disagree about
+                # what they stand on: the same process answering both the API and the mirror, the
+                # same clock, the same generation. Field completeness does not buy independence.
+                "observed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "manifest_generation": int(STORE.load_manifest().get("manifest_generation") or 0),
+                "api_version": "0.4.6",
+                "fence": {
+                    "host_role": "shelf-origin",
+                    "api": "this shelf's own service",
+                    "mirror": "served by the same host as the API",
+                    "clock": "that host's UTC clock",
+                    "meaning": ("a second reading taken through this shelf shares these; agreeing "
+                                "with it is agreement about one origin, not two independent ones"),
+                },
             })
             return
         if path.startswith("/v1/by-sha256/"):

@@ -471,6 +471,18 @@ def check(surface, rep: Report, *, limit: int | None = None, strict: bool = Fals
             else:
                 rep.add("A1b served and named by a replacement (superseded)", PASS,
                         f"{sn} blob(s), {sb} bytes (reachable history, not residue)")
+            try:
+                fence = json.loads(body)["fence"]
+                gen = json.loads(body).get("manifest_generation")
+            except Exception:  # noqa: BLE001
+                rep.add("A3 the receipt names the substrate both readings share", UNKNOWN,
+                        "agreement endpoint carries no fence; this reading's independence is "
+                        "unstated")
+            else:
+                rep.add("A3 the receipt names the substrate both readings share", PASS,
+                        f"mirror={fence.get('mirror')}; clock={fence.get('clock')}; "
+                        f"generation={gen} — a second reading through this host shares it, so "
+                        "agreement here is agreement about ONE origin")
     return rep
 
 
