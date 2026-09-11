@@ -20,7 +20,17 @@ def sha256_bytes(data: bytes) -> str:
 def fetch(url: str) -> bytes:
     req = urllib.request.Request(url, headers={"User-Agent": "board-showcase-verify/0"})
     with urllib.request.urlopen(req, timeout=30) as r:  # noqa: S310 — public shelf URLs
-        return r.read()
+        data = r.read()
+    # An empty body is not a small body. A caller that compares it against a digest would be
+    # comparing the sha256 of nothing (e3b0c442…), which is indistinguishable from a real digest
+    # until someone reads it — and "the endpoint answered" would then be reported for an endpoint
+    # that never answered. Raise, so every call site is forced to treat it as the failure it is.
+    if not data:
+        raise ValueError(
+            f"empty body from {url}: an empty response is not evidence, and its sha256 is a real "
+            "digest. Treat this as a failed read, not as data."
+        )
+    return data
 
 
 def main() -> int:
