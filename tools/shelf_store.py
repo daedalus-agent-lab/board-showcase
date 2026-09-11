@@ -669,14 +669,18 @@ class ShelfStore:
         orphan_b, orphan_n = self.orphan_totals()
         return live_b + orphan_b, live_n + orphan_n
 
-    def publish_public(self) -> list[str]:
+    def publish_public(self, sweep_foreign: bool = False) -> list[str]:
         """Write the mirror as a projection of the catalog, and return stale names removed.
 
         The mirror is derived state: what it should contain is a function of the live rows, the
         generated catalogs and a small keep list. Writing only the live files left the copy of a
-        superseded or evicted object behind, which a reader cannot tell from a live one. Sweeping
-        here means any later drift is corrected by the next publish rather than by a second fix in
-        the eviction path.
+        superseded or evicted object behind, which a reader cannot tell from a live one.
+
+        The sweep removes only what this publisher wrote — the files named in the previous
+        published.json that are no longer live. A file the publisher never wrote was placed in the
+        web root by someone or something else and may be cited by a post, so removing it would break
+        a promise this function knows nothing about; those are reported instead. sweep_foreign=True
+        removes them too, and is for a rehearsed copy, not for a live mirror.
         """
         if self.public_dir.resolve() == self.data_dir.resolve():
             return []
@@ -690,6 +694,14 @@ class ShelfStore:
         else:
             # Files the site itself owns: not artifacts, and not ours to delete.
             keep |= {"index.html", ".nojekyll"}
+        # What the last publish of ours wrote, and therefore what we may take back.
+        prev = set()
+        published = self.public_dir / "published.json"
+        if published.is_file():
+            try:
+                prev = {str(n) for n in (_read_json(published).get("files") or [])}
+            except Exception:  # noqa: BLE001
+                prev = set()
         _atomic_write(self.public_dir / "manifest.json", self.manifest_path.read_bytes())
         _atomic_write(self.public_dir / "search.json", self.search_path.read_bytes())
         # The mirror's own withdrawal receipt: without it a 404 states only that the bytes are not
@@ -711,16 +723,20 @@ class ShelfStore:
             if src.is_file():
                 _atomic_write(self.public_dir / filename, src.read_bytes(), mode=0o644)
                 wrote.add(filename)
-        removed = []
+        removed, foreign = [], []
         for p in sorted(self.public_dir.iterdir()):
             if not p.is_file() or p.name in wrote or p.name in keep:
                 continue
-            removed.append(p.name)
-            p.unlink()
+            if p.name in prev or sweep_foreign:
+                removed.append(p.name)
+                p.unlink()
+            else:
+                foreign.append(p.name)
         _atomic_write(
             self.public_dir / "published.json",
             json.dumps({"generated_at": _now(), "files": sorted(wrote), "keep": sorted(keep),
-                        "removed_stale": removed}, indent=2, sort_keys=True).encode(),
+                        "removed_stale": removed, "foreign_left_alone": foreign},
+                       indent=2, sort_keys=True).encode(),
         )
         return removed
 

@@ -199,19 +199,36 @@ class EvictionTests(unittest.TestCase):
 
     # ---------------------------------------------------------------- the mirror is a projection
 
-    def test_publish_sweeps_a_file_no_live_row_claims(self):
-        """The mirror must be derivable from the catalog, so a copy whose name left the catalog
-        cannot outlive it — including one written by an older version of the publisher."""
+    def test_publish_leaves_a_file_it_never_wrote_alone(self):
+        """A file the publisher never wrote may be cited by a post; the publisher knows nothing
+        about that promise and must not break it. This is the regression that took out a cited URL:
+        the first sweep removed ten hand-placed files, one of them linked from a live thread."""
         self.accept("live.md", "# live\n", "key-live-000000001")
         self.publish()
-        stale = self.public / "stale-from-an-older-publisher.md"
-        stale.write_text("# bytes nothing advertises\n")
+        cited = self.public / "hand-placed-and-cited.md"
+        cited.write_text("# someone else's file, linked from a post\n")
 
         swept = self.store.publish_public()
 
-        self.assertIn("stale-from-an-older-publisher.md", swept)
-        self.assertFalse(stale.exists())
-        self.assertTrue((self.public / "live.md").is_file(), "swept a name a live row claims")
+        self.assertEqual(swept, [], "swept a file it never wrote")
+        self.assertTrue(cited.exists(), "removed a name whose citation it cannot see")
+        published = json.loads((self.public / "published.json").read_text())
+        self.assertIn("hand-placed-and-cited.md", published["foreign_left_alone"])
+
+    def test_publish_sweeps_a_file_it_did_write_and_no_longer_claims(self):
+        """The sweep still works on the publisher's own outputs: a copy that stops being live is
+        withdrawn from the mirror by the next publish, without the eviction path having to know."""
+        self.accept("gone.md", "# doomed soon\n", "key-gone-000000001")
+        self.publish()
+        self.assertTrue((self.public / "gone.md").is_file())
+        man = json.loads((self.data / "manifest.json").read_text())
+        man["artifacts"] = [a for a in man["artifacts"] if a["filename"] != "gone.md"]
+        (self.data / "manifest.json").write_text(json.dumps(man, indent=2, sort_keys=True))
+
+        swept = self.store.publish_public()
+
+        self.assertIn("gone.md", swept)
+        self.assertFalse((self.public / "gone.md").exists())
 
     def test_publish_keeps_the_files_it_generates_and_the_site_itself(self):
         """The sweep must not eat the catalog it publishes, nor the Pages entry point."""
