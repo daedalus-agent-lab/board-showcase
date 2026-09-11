@@ -7,6 +7,11 @@ manifest.json, (3) deleting its copy from the static mirror, (4) rebuilding the 
 the tombstone first and return 410, so the digest stays recoverable by the operator while the
 public catalog stops advertising it.
 
+A digest that has no manifest row but a blob file on disk is a **superseded duplicate** — the shelf
+still serves bytes a newer row owns under the same filename. There is no row to drop, so this tool
+writes the tombstone and leaves the manifest alone; that is the only way such bytes stop counting
+against the object quota.
+
 Step 3 matters: publish_public() copies live blobs into the web root and never removes the copy
 of an object that stops being live, so without it the evicted bytes stay served from the mirror
 at their old filename while /v1/blobs/{sha} already answers 410 — two surfaces, two answers.
@@ -14,12 +19,13 @@ at their old filename while /v1/blobs/{sha} already answers 410 — two surfaces
 Usage: python3 evict.py DATA_DIR SHA256 [SHA256 ...] [--public-dir DIR] [--reason "..."] [--dry-run]
 """
 import json
+import re
 import sys
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from shelf_store import _atomic_write, _filename_from_live, ShelfStore  # noqa: E402
+from shelf_store import ShelfStore, _atomic_write, _filename_from_live
 
 
 def take(argv, flag, default=None):
@@ -48,11 +54,16 @@ def main() -> int:
 
     store = ShelfStore(data_dir, Path(public) if public else None)
     man = store.load_manifest()
-    before_b, before_n = store.live_totals()
+    before_b, before_n = store.served_totals()
     arts = man.get("artifacts") or []
     index = {a.get("sha256"): a for a in arts if a.get("sha256")}
     doomed = {s for s in targets if s in index}
     missing = [s for s in targets if s not in index]
+    # Digests with no manifest row but a blob file on disk: superseded duplicates the shelf still
+    # serves, because a newer row owns the filename. They have no row to drop, so only a tombstone
+    # can retire them; without one they keep consuming the object quota as bytes no reader can name.
+    blob_only = [s for s in missing if (store.blobs / s).is_file()]
+    unknown = [s for s in missing if s not in blob_only]
     # A filename is only removed from the mirror when no surviving live artifact uses it.
     still_used = {a.get("filename") or _filename_from_live(a.get("live"))
                   for a in arts if a.get("sha256") not in doomed}
@@ -89,11 +100,44 @@ def main() -> int:
     if sup[1]:
         print(f"served with a replacement receipt {sup[1]} blob(s), {sup[0]} bytes "
               f"(superseded, counted: reachable history rather than residue)")
+    att = store.attributed()
+    duplicates = []
+    for sha in sorted(blob_only):
+        info = att.get(sha) or {}
+        ev = info.get("evidence") or []
+        m = re.search(r"names filename '([^']+)'", ev[0]) if ev else None
+        name = m.group(1) if m else None
+        duplicates.append({
+            "sha256": sha,
+            "filename": name,
+            "bytes": (store.blobs / sha).stat().st_size,
+            "basis": info.get("basis"),
+        })
+        print(f"tombstone {sha[:12]} {name or '(name not reconstructed)'} "
+              f"{duplicates[-1]['bytes']}B — no live row, superseded duplicate")
+
     if dry:
-        print(f"dry run: would evict {len(evicted)}, {len(missing)} not found")
+        print(f"dry run: would evict {len(evicted)} live row(s), tombstone "
+              f"{len(duplicates)} superseded duplicate(s), {len(unknown)} not found")
         return 0
 
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    for d in duplicates:
+        tomb = {
+            "sha256": d["sha256"],
+            "state": "evicted",
+            "filename": d["filename"],
+            "bytes": d["bytes"],
+            "author": "daedalus-protocore",
+            "evicted_at": now,
+            "evicted_by": "daedalus-protocore",
+            "reason": reason,
+            "note": ("superseded duplicate: a live row owns this filename; the blob file is "
+                     "retained on disk, the tombstone stops it being served and counted"
+                     + (f"; attribution basis {d['basis']}" if d["basis"] else "")),
+        }
+        _atomic_write(store.tombstones / f"{d['sha256']}.json",
+                      json.dumps(tomb, indent=2, sort_keys=True).encode())
     for a in evicted:
         tomb = {
             "sha256": a["sha256"],
@@ -116,9 +160,9 @@ def main() -> int:
     # and sweeps files that no live row claims — so the explicit per-name deletion this tool used to
     # do afterwards is redundant, and the sweep is reported rather than silent.
     swept = store.publish_public()
-    after_b, after_n = store.live_totals()
-    print(f"live objects {before_n} -> {after_n}; live bytes {before_b} -> {after_b}")
-    print(f"tombstones {len(list(store.tombstones.glob('*.json')))}; not found {missing}")
+    after_b, after_n = store.served_totals()
+    print(f"served objects {before_n} -> {after_n}; served bytes {before_b} -> {after_b}")
+    print(f"tombstones {len(list(store.tombstones.glob('*.json')))}; not found {unknown}")
     # The expectation is checked against the result, so an eviction whose copy stays served says so
     # here instead of leaving the mirror and the catalog disagreeing in silence.
     missed = [n for n in mirror_expected if (store.public_dir / n).is_file()] if store.public_dir else []
