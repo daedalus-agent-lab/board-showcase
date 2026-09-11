@@ -23,7 +23,14 @@ sys.path.insert(0, str(HERE))
 
 from shelf_lib import check_package, sha256_hex  # noqa: E402
 from shelf_store import ShelfStore  # noqa: E402
-from verify_agreement import FAIL, PASS, UNKNOWN, Report, check_a5_snapshot  # noqa: E402
+from verify_agreement import (  # noqa: E402
+    FAIL,
+    PASS,
+    UNKNOWN,
+    Report,
+    check_a3_fence,
+    check_a5_snapshot,
+)
 
 CHECK = Path(os.environ.get("AGREEMENT_PY", str(HERE / "verify_agreement.py"))).resolve()
 
@@ -490,5 +497,58 @@ class SnapshotBoundaryTests(unittest.TestCase):
         self.assertEqual([r for r in rep_strict.rows if r[0].startswith("A5")][0][1], FAIL)
 
 
+class FenceVersionTests(unittest.TestCase):
+    """Two receipts are comparable only if they say the same thing about what they stand on."""
+
+    ROLES = {"host_role": {"denotes": "one machine", "observed_at": "this response"},
+             "clock": {"denotes": "that host's UTC clock", "observed_at": "observed_at field"}}
+
+    def fence(self, roles=None, digest=None, schema=1):
+        roles = roles if roles is not None else self.ROLES
+        proj = {k: {"denotes": v.get("denotes"), "observed_at": v.get("observed_at")}
+                for k, v in roles.items()}
+        real = hashlib.sha256(json.dumps(proj, sort_keys=True,
+                                         separators=(",", ":")).encode()).hexdigest()
+        return {"schema": schema, "roles": roles, "roles_sha256": digest or real}
+
+    def verdict_for(self, fence, strict=False):
+        rep = Report()
+        check_a3_fence(fence, 7, rep, strict)
+        return [r for r in rep.rows if r[0].startswith("A3")][0]
+
+    def test_a_recomputable_role_map_passes_and_prints_the_version(self):
+        line = self.verdict_for(self.fence())
+        self.assertEqual(line[1], PASS)
+        self.assertIn("roles_sha256=", line[2])
+
+    def test_a_digest_that_does_not_cover_its_roles_fails(self):
+        line = self.verdict_for(self.fence(digest="0" * 64))
+        self.assertEqual(line[1], FAIL)
+        self.assertIn("does not cover the roles", line[2])
+
+    def test_redefining_a_role_changes_the_version(self):
+        before = self.verdict_for(self.fence())
+        changed = dict(self.ROLES)
+        changed["mirror"] = {"denotes": "a DIFFERENT host's copy",
+                             "observed_at": "somewhere else"}
+        after = self.verdict_for(self.fence(roles=changed))
+        self.assertEqual(before[1], PASS)
+        self.assertEqual(after[1], PASS)
+        self.assertNotEqual(before[2].split("roles_sha256=")[1][:16],
+                            after[2].split("roles_sha256=")[1][:16],
+                            "the same words on a different substrate must not compare equal")
+
+    def test_a_role_without_an_observation_point_is_unknown(self):
+        roles = {"mirror": {"denotes": "the files"}}
+        line = self.verdict_for(self.fence(roles=roles))
+        self.assertEqual(line[1], UNKNOWN)
+
+    def test_a_fence_without_a_role_map_is_unknown_not_pass(self):
+        line = self.verdict_for({"host_role": "shelf-origin", "mirror": "same host as the API"})
+        self.assertEqual(line[1], UNKNOWN)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+

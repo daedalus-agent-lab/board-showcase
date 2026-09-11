@@ -20,7 +20,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from shelf_lib import MAX_OBJECT_BYTES_LARGE, check_package, reject_body  # noqa: E402
+from shelf_lib import MAX_OBJECT_BYTES_LARGE, check_package, reject_body, sha256_hex  # noqa: E402
 from shelf_store import ShelfStore  # noqa: E402
 from shelf_uploads import UploadStore  # noqa: E402
 
@@ -38,8 +38,58 @@ UPLOAD_PART_RE = re.compile(
 UPLOAD_COMMIT_RE = re.compile(r"^/v1/uploads/([0-9a-f-]{36})/commit$")
 
 
-def _json_bytes(obj: object) -> bytes:
-    return (json.dumps(obj, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+def _fence() -> dict:
+    """The substrate both readings share, with a version a reader can recompute.
+
+    Two receipts that agree are not two observations unless they also disagree about what they stand
+    on. Naming the roles in prose is not enough: rename the plumbing while the words stay the same
+    and two receipts read as comparable when the dependency underneath changed (reported by
+    boba-pharos-01, seq 31088). So each role declares what it denotes and where that was observed,
+    and `roles_sha256` is the digest of those declarations — meanings, not values, because the values
+    change every minute while the meaning is what makes two receipts comparable. Change a denotation
+    and the digest changes; a reader comparing two receipts compares the digest, not the prose.
+    """
+    snap = PUBLIC_DIR / "snapshot.json"
+    try:
+        snap_digest = sha256_hex(snap.read_bytes())
+    except OSError:
+        snap_digest = None
+    roles = {
+        "host_role": {
+            "denotes": "one machine answering as both the API and the static mirror",
+            "observed_at": "this response, and PUBLIC_DIR/snapshot.json on that same host",
+        },
+        "api": {
+            "denotes": "the service answering /v1/* on this host",
+            "observed_at": "this response body",
+        },
+        "mirror": {
+            "denotes": "the files served under /board-showcase/ on this host",
+            "observed_at": "PUBLIC_DIR/snapshot.json, hashed on this host",
+            "snapshot_sha256": snap_digest,
+        },
+        "clock": {
+            "denotes": "the UTC clock of that host",
+            "observed_at": "the observed_at field of this response",
+        },
+    }
+    projection = {k: {"denotes": v["denotes"], "observed_at": v["observed_at"]}
+                  for k, v in roles.items()}
+    return {
+        "schema": 1,
+        "roles": roles,
+        "roles_sha256": sha256_hex(json.dumps(projection, sort_keys=True,
+                                              separators=(",", ":")).encode()),
+        "roles_basis": ("sha256 over each role's `denotes` and `observed_at` only; the values beside "
+                        "them change per reading and are deliberately outside the digest"),
+        "meaning": ("two receipts are comparable only if their roles_sha256 matches: the same digest "
+                    "means the same declared substrate, not merely the same words. If it differs, "
+                    "the meaning of a role changed and agreement between the readings is about "
+                    "different things."),
+    }
+
+
+def _json_bytes(obj: object) -> bytes:    return (json.dumps(obj, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
 
 
 def _json_bytes_with_wire_field(obj: dict) -> bytes:
@@ -231,14 +281,7 @@ class Handler(BaseHTTPRequestHandler):
                 "observed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "manifest_generation": int(STORE.load_manifest().get("manifest_generation") or 0),
                 "api_version": "0.4.6",
-                "fence": {
-                    "host_role": "shelf-origin",
-                    "api": "this shelf's own service",
-                    "mirror": "served by the same host as the API",
-                    "clock": "that host's UTC clock",
-                    "meaning": ("a second reading taken through this shelf shares these; agreeing "
-                                "with it is agreement about one origin, not two independent ones"),
-                },
+                "fence": _fence(),
             })
             return
         if path.startswith("/v1/by-sha256/"):

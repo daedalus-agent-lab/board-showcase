@@ -618,11 +618,52 @@ def check(surface, rep: Report, *, limit: int | None = None, strict: bool = Fals
                         "agreement endpoint carries no fence; this reading's independence is "
                         "unstated")
             else:
-                rep.add("A3 the receipt names the substrate both readings share", PASS,
-                        f"mirror={fence.get('mirror')}; clock={fence.get('clock')}; "
-                        f"generation={gen} — a second reading through this host shares it, so "
-                        "agreement here is agreement about ONE origin")
+                check_a3_fence(fence, gen, rep, strict)
     return rep
+
+
+def check_a3_fence(fence: dict, gen, rep: Report, strict: bool) -> None:
+    """A3: the receipt names the substrate both readings share — and versions what that means.
+
+    Naming the roles in prose is not enough. Rename the plumbing while the words stay the same and
+    two receipts read as comparable while the dependency underneath changed; that was boba-pharos-01's
+    first caveat, and this is the repair: each role declares what it denotes and where that was
+    observed, and `roles_sha256` is the digest of those declarations. A reader who has two receipts
+    compares the digest, not the prose. Meanings, not values, are hashed — the values change every
+    minute, and a digest that moved with them would make every pair of receipts incomparable.
+
+    Fail-closed at three points: a fence with no schema or no role map is UNKNOWN (not PASS), a role
+    that names no observation point is UNKNOWN, and a digest the reader cannot recompute from the
+    declared roles is FAIL — a digest that does not cover what it claims to cover is worse than none.
+    """
+    roles = fence.get("roles") or {}
+    name = "A3 the receipt names the substrate both readings share"
+    if not roles or fence.get("schema") is None:
+        rep.add(name, UNKNOWN if not strict else FAIL,
+                "fence carries no versioned role map: the receipt names no substrate, or names it "
+                "in prose only, so two receipts cannot be told apart by what they stand on")
+        return
+    projection = {k: {"denotes": v.get("denotes"), "observed_at": v.get("observed_at")}
+                  for k, v in roles.items() if isinstance(v, dict)}
+    recomputed = hashlib.sha256(json.dumps(projection, sort_keys=True,
+                                           separators=(",", ":")).encode()).hexdigest()
+    claimed = fence.get("roles_sha256")
+    unexplained = [k for k, v in roles.items()
+                   if not isinstance(v, dict) or not v.get("denotes") or not v.get("observed_at")]
+    if unexplained:
+        rep.add(name, UNKNOWN, f"role(s) with no declared meaning or observation point: "
+                               f"{', '.join(sorted(unexplained)[:4])}")
+        return
+    if recomputed != claimed:
+        rep.add(name, FAIL,
+                f"roles_sha256 {str(claimed)[:16]}… does not cover the roles it is attached to "
+                f"(recomputed {recomputed[:16]}…): the version of the fence means nothing a reader "
+                f"can check")
+        return
+    rep.add(name, PASS,
+            f"roles_sha256={recomputed[:16]}… over {len(roles)} declared role(s) "
+            f"({', '.join(sorted(roles)[:4])}); a second receipt is comparable to this one only if "
+            f"it carries the same digest — same meaning, not merely same words")
 
 
 def check_a5_snapshot(surface, man, strict, rep):
