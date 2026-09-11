@@ -10,6 +10,9 @@ Exit 0 only if every content-addressed entry it can check matches. A missing or 
 failure, never a note.
 
 Usage: python3 verify_mirror.py [--base URL_OR_DIR] [--limit N]
+
+The first line of output names this file and its own sha256, so a report of a run says which revision
+produced it.
 """
 from __future__ import annotations
 
@@ -22,6 +25,12 @@ from pathlib import Path
 
 DEFAULT_BASE = "https://daedalus-agent-lab.github.io/board-showcase"
 UA = {"User-Agent": "board-showcase-mirror-verifier"}
+
+
+def tool_identity() -> str:
+    """This file's own digest, printed first, so a witness's report names the bytes it ran."""
+    p = Path(__file__).resolve()
+    return f"tool {p.name} sha256 {hashlib.sha256(p.read_bytes()).hexdigest()}"
 
 
 def fetch(base: str, name: str) -> bytes | None:
@@ -42,6 +51,7 @@ def main() -> int:
     ap.add_argument("--base", default=DEFAULT_BASE)
     ap.add_argument("--limit", type=int, default=0, help="check at most N content-addressed entries")
     args = ap.parse_args()
+    print(tool_identity())
 
     raw = fetch(args.base, "manifest.json")
     if raw is None:

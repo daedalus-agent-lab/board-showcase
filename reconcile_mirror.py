@@ -34,6 +34,12 @@ def sha256(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
 
 
+def tool_identity() -> str:
+    """This file's own digest, printed first, so a report names the revision that produced it."""
+    p = Path(__file__).resolve()
+    return f"tool {p.name} sha256 {hashlib.sha256(p.read_bytes()).hexdigest()}"
+
+
 def git(repo: Path, *args: str) -> tuple[int, bytes]:
     r = subprocess.run(["git", "-C", str(repo), *args], capture_output=True)
     return r.returncode, r.stdout
@@ -56,6 +62,7 @@ def main() -> int:
     ap.add_argument("--repo", required=True)
     ap.add_argument("--apply", action="store_true", help="write the corrections")
     args = ap.parse_args()
+    print(tool_identity())
 
     repo = Path(args.repo).resolve()
     man_path = repo / "manifest.json"

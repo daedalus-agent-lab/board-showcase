@@ -56,6 +56,33 @@ def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def derive_chain_start(history: Path, newest_version: int) -> int:
+    """The version whose own predecessor this repository cannot produce: where verification stops.
+
+    Walk down from `newest_version` while each manifest's `previous_sha256` is the digest of a manifest
+    present in `history/`. The first version that names bytes this mirror does not hold is chain_start.
+
+    Deriving it is the whole point. The earlier code wrote the version it happened to be anchoring, so
+    v44 declared `chain_start: 43` while its own note said verification starts at v42 — and because a
+    missing link at the declared start counted as "documented", deleting `history/manifest-v42.json`,
+    a file this mirror had published, still produced `CHAIN: 1 link(s) verified` and exit 0.
+    """
+    by_version: dict[int, bytes] = {}
+    for p in history.glob("manifest-v*.json"):
+        try:
+            by_version[int(p.name[len("manifest-v"):-len(".json")])] = p.read_bytes()
+        except ValueError:
+            continue
+    digests = {sha256(b) for b in by_version.values()}
+    v = newest_version
+    while v in by_version:
+        prev = json.loads(by_version[v]).get("previous_sha256")
+        if not prev or prev not in digests:
+            return v
+        v -= 1
+    return v
+
+
 def entry_from_host(row: dict) -> dict:
     """One catalog row, in the shape this mirror's readers already parse."""
     e = {
@@ -174,32 +201,38 @@ def main() -> int:
         "previous_rule": "sha256 of the previous MIRROR manifest bytes (see chain_note)",
         "source_catalog": {"generation": host_gen, "sha256": sha256(host_bytes),
                            "observed_at": host.get("updated")},
-        "chain_start": current_version,
+        "chain_start": None,  # derived from the manifests this repository actually holds, below
         "chain_note": (
             "previous_sha256 is the sha256 of the previous manifest published in THIS repository, "
             "and every such manifest is kept under history/. The earlier rule pointed at the last "
             "manifest the host published, which the mirror does not necessarily carry: v42 anchored "
             "to fd91053a…, which no revision here hashes to, because host generations 40 and 41 "
             "never reached the mirror. That link is broken and stays broken — the bytes do not "
-            "exist here to repair it. Verification therefore starts at v42, whose bytes are in this "
-            "repository, and every link from v43 on resolves inside history/. Run verify_chain.py "
-            "to walk it; it fails on the first link it cannot check."
+            "exist here to repair it. Verification therefore starts at the version below whose own "
+            "predecessor this repository cannot produce, and every link above it resolves inside "
+            "history/. The value is computed from the files present, never declared by hand: a "
+            "version that names a predecessor the mirror DOES hold is a checkable link, and calling "
+            "it a break made a deleted file look like a clean stop. Run verify_chain.py to walk it; "
+            "it fails on the first link it cannot check."
         ),
         "witnessed_v0_sha256": current.get("witnessed_v0_sha256"),
         "already_hosted": current.get("already_hosted") or [],
         "artifacts": entries,
     }
     blob = (json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode()
-    digest_new = sha256(blob)
     history = repo / "history"
     history.mkdir(exist_ok=True)
     # Keep the predecessor's exact bytes too, so the new link resolves from inside the mirror even
     # for a reader who never fetches a git parent.
     (history / f"manifest-v{current_version}.json").write_bytes(current_bytes)
+    manifest["chain_start"] = derive_chain_start(history, current_version)
+    blob = (json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode()
+    digest_new = sha256(blob)
     (history / f"manifest-v{version}.json").write_bytes(blob)
     current_path.write_bytes(blob)
 
     print(f"\nnew mirror manifest: v{version} sha256 {digest_new[:16]}…")
+    print(f"  chain_start v{manifest['chain_start']} (derived from history/)")
     print(f"  entries: {len(entries)} ({len(kept_but_not_live)} kept although no longer live on "
           f"the host)")
     print(f"  blobs fetched: {len(added)}, already held: {already}, kept from an older catalog: "

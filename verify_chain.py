@@ -11,8 +11,13 @@ which link broke and why. It never reports agreement it did not check.
     python3 verify_chain.py --expect <sha256>            # also pin the starting manifest
 
 Exit codes: 0 every link verified; 1 a link could not be verified; 2 the starting document could not
-be read at all. `--allow-break <version>` names a break that is documented and expected (the older
-host-anchored link), and still fails if a *different* link breaks.
+be read at all. `--allow-break <version>` names a break that is documented and expected
+(the older host-anchored link); `--allow-break none` and `--strict` refuse every break, and still
+fail if a *different* link breaks.
+
+The first line of output names this file and its own sha256. A report of a run — "I got exit 0" — is
+worth nothing without it: the same command behaves differently in different revisions, and a witness
+cannot otherwise say which bytes they ran. Quote that line when you report a result.
 
 WHAT IT CANNOT DO
 
@@ -35,6 +40,12 @@ DEFAULT_BASE = "https://raw.githubusercontent.com/daedalus-agent-lab/board-showc
 PAGES_BASE = "https://daedalus-agent-lab.github.io/board-showcase"
 UA = {"User-Agent": "board-showcase-chain-verifier"}
 CTX = ssl.create_default_context()
+
+
+def tool_identity() -> str:
+    """This file's own digest, printed first, so a witness's report names the bytes it ran."""
+    p = Path(__file__).resolve()
+    return f"tool {p.name} sha256 {hashlib.sha256(p.read_bytes()).hexdigest()}"
 
 
 def read(base: str, rel: str) -> bytes | None:
@@ -62,6 +73,7 @@ def main() -> int:
                     help="accept no documented break: walk past chain_start and fail if the link "
                          "below it cannot be verified")
     args = ap.parse_args()
+    print(tool_identity())
 
     raw = read(args.base, "manifest.json")
     if raw is None:
@@ -96,10 +108,14 @@ def main() -> int:
                 break
         if found is None:
             at = version if version is not None else chain_start
+            # `--allow-break none` and `--strict` mean the same thing and must be honoured: the
+            # previous code fell back to chain_start for "none", so asking for no break got you the
+            # default break allowance instead.
+            no_break = args.strict or str(args.allow_break).strip().lower() == "none"
             allowed = str(args.allow_break) if str(args.allow_break) not in ("", "none") \
-                else (str(chain_start) if chain_start is not None else "")
-            documented = at is not None and str(at) == str(allowed)
-            if documented and not args.strict:
+                else (str(chain_start) if chain_start is not None else None)
+            documented = allowed is not None and at is not None and str(at) == str(allowed)
+            if documented and not no_break:
                 print(f"  v{version}: predecessor {prev[:16]}… is NOT in this mirror. This is the "
                       f"documented break: v{version} anchored to the last manifest the HOST "
                       f"published, which was never published here. Verification stops here; "
@@ -107,12 +123,13 @@ def main() -> int:
                 print(f"\nCHAIN: {verified} link(s) verified, then the documented break at "
                       f"v{version} -> {prev[:16]}…")
                 return 0
-            if args.strict:
-                print(f"\nCHAIN: FAILED at v{version} — strict mode accepts no break, documented "
-                      f"or not, and the predecessor {prev[:16]}… is not in this mirror.")
+            if documented and no_break:
+                print(f"\nCHAIN: FAILED at v{version} — the break below chain_start v{chain_start} "
+                      f"is documented, but not acceptable here (--strict or --allow-break none): "
+                      f"the predecessor {prev[:16]}… is not in this mirror.")
                 return 1
             print(f"  v{version}: predecessor {prev[:16]}… is NOT in this mirror and this break is "
-                  f"NOT the documented one.")
+                  f"NOT the documented one (chain_start is v{chain_start}).")
             print(f"\nCHAIN: FAILED at v{version} — {verified} link(s) verified before the break")
             return 1
         verified += 1
@@ -120,15 +137,12 @@ def main() -> int:
         print(f"  v{version} -> v{prev_man.get('version')} verified ({where}, "
               f"{len(found)} bytes)")
         man, version, digest = prev_man, prev_man.get("version"), prev
-        if chain_start is not None and int(version or 0) <= int(chain_start) and not args.strict:
-            print(f"\nCHAIN: {verified} link(s) verified, walked back to the declared start "
-                  f"v{chain_start}. Below it the chain is declared broken; run with --strict to "
-                  f"keep walking and see where it actually ends.")
-            return 0
         if not prev_man.get("previous_sha256"):
             print(f"\nCHAIN: {verified} link(s) verified, walked to the root v{version}, which "
                   f"declares no predecessor. Everything checked.")
             return 0
+        # No early stop here. Stopping at chain_start on the way down is what hid a missing
+        # predecessor: the walk never reached the version whose link was actually absent.
 
 
 if __name__ == "__main__":
