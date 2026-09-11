@@ -1,0 +1,41 @@
+A. the reported attack: a manifest names its own file location (reader report ef9ab50a)
+      measured ecf55c35a526e3f4  == base+path: True  == evil: False
+ok          record measured the reader-derived location, never the manifest's claim
+ok    exit 0  the claim is kept as metadata, so a reader can see it was made
+      
+ok    exit 1  verify answers about the base-url the caller named: those bytes differ from the measured ones
+      CHANGED   shared.txt  expected ecf55c35a526e3f4…; served 5c32e9b48bf70adf…  (http://127.0.0.1:8901/trusted/shared.txt) checked 1 files, 1 changed,
+ok    exit 0  the location the receipt measured: ALL MATCH
+      checked 1 files, 0 changed, 0 missing, 0 unverifiable VERDICT ALL MATCH (the live manifest lists exactly these paths) 
+ok    exit 0  an explicit --base outranks a claim (the caller's location wins)
+      checked 1 files, 0 changed, 0 missing, 0 unverifiable VERDICT ALL MATCH (the live manifest lists exactly these paths) 
+ok    exit 1  the claim is used only when asked, and then the URL it used is printed
+      CHANGED   shared.txt  expected ecf55c35a526e3f4…; served 9b003d810b293ff8…  (http://127.0.0.1:8901/evil/shared.txt) checked 1 files, 1 changed, 0 
+B. a live third-party release (https://gpb-feed.vercel.app/source/0.3.7/manifest.json)
+ok    exit 0  record, then recheck the same URL
+      served    c9ede478c1cf9099d9c17239dd942dc2  https://gpb-feed.vercel.app/source/0.3.7/manifest.json VERDICT UNCHANGED 
+ok    exit 0  this release aliases its file URLs; recorded explicitly, verify uses the measured URLs
+      checked 28 files, 0 changed, 0 missing, 0 unverifiable VERDICT ALL MATCH (the live manifest lists exactly these paths) 
+ok    exit 2  recheck a URL that serves 404
+      MISSING   HTTP 404 from https://gpb-feed.vercel.app/source/nope/manifest.json 
+C. a claim is not a measurement; an error page is not a changed release
+      files 1 listed, 1 measured, 1 declared-mismatch, 0 unreachable
+ MISMATCH a.txt: manifest declared DEADBEEFCLAIM, measured 2d711642b726b044
+ok    exit 0  the manifest claimed DEADBEEFCLAIM; the receipt holds what the reader measured
+      checked 1 files, 0 changed, 0 missing, 0 unverifiable VERDICT ALL MATCH (the live manifest lists exactly these paths) 
+ok    exit 1  a file whose bytes changed: CHANGED
+      CHANGED   a.txt  expected 2d711642b726b044…; served a1fce4363854ff88…  (http://127.0.0.1:8902/a.txt) checked 1 files, 1 changed, 0 missing, 0 unve
+ok    exit 3  the URL serves an HTML page where it served JSON: DEGRADED, not CHANGED
+      final     now http://127.0.0.1:8902/  (was http://127.0.0.1:8902/manifest.json) DEGRADED  the URL now serves text/html where the receipt recorded appl
+D. the reported list drift: a manifest that gains or loses a path (reader report c7200e19)
+ok    exit 0  unchanged list, unchanged bytes: ALL MATCH
+      checked 2 files, 0 changed, 0 missing, 0 unverifiable VERDICT ALL MATCH (the live manifest lists exactly these paths) 
+ok          exit 1, and the path that joined is named
+      list      3 path(s) now, 2 in the receipt   ADDED     c.txt  (in the live manifest, not in the receipt)  <http://127.0.0.1:8903/manifest.json> note   
+ok          exit 1, and the path that left is named
+      list      1 path(s) now, 2 in the receipt   REMOVED   b.txt  (in the receipt, absent from the live manifest)  <http://127.0.0.1:8903/manifest.json> no
+ok          exit 0, the recorded set alone answers, and the verdict says so
+      scope     the file list is NOT checked (--no-manifest): this answers only about the paths already in the receipt VERDICT ALL MATCH (recorded set only;
+ok          recheck names the path that left instead of an opaque CHANGED
+        REMOVED   b.txt  (in the receipt, absent from the live manifest)  <http://127.0.0.1:8903/manifest.json> VERDICT CHANGED — this URL no longer serve
+ALL VERDICTS AS EXPECTED
