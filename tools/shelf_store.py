@@ -351,6 +351,41 @@ class ShelfStore:
             )
             existing = _read_json(key_path) if key_path.is_file() else None
             if existing:
+                # The tombstone is checked before the key's fingerprint, not after it. A digest
+                # address is retired by a fact local to the request that names it, so the answer to
+                # a request must not depend on which other request happened to use its key in
+                # between: the identical (bytes, key) pair used to answer DIGEST_TOMBSTONED in a
+                # quiet store and IDEMPOTENCY_CONFLICT after an unrelated write bound the key
+                # elsewhere. Both were refusals, so no retired address ever got a success answer —
+                # but a client branching on the code could not predict what it would get.
+                tomb = self.tombstone_of(check.sha256)
+                if tomb is not None:
+                    bound_here = existing.get("fingerprint") == check.fingerprint
+                    return {
+                        "status": "refused",
+                        "http": 409,
+                        "error": "DIGEST_TOMBSTONED",
+                        "message": (
+                            f"{check.sha256} carries a tombstone: these bytes were evicted and the "
+                            "digest address is retired."
+                            + (f" This is a retry of operation {existing.get('operation_id')}, "
+                               "which is still readable, but it cannot be answered with a success "
+                               "receipt for an address that answers 410."
+                               if bound_here else
+                               f" The key {idempotency_key!r} is already bound to different bytes, "
+                               "but the cause here is the tombstone, not the key: publish different "
+                               "bytes, or lift the tombstone.")
+                        ),
+                        "tombstone": tomb,
+                        "operation_id": existing.get("operation_id") if bound_here else None,
+                        "sha256": check.sha256,
+                        "filename": check.filename,
+                        "urls": {
+                            "blob": f"/v1/blobs/{check.sha256}",
+                            "operation": (f"/v1/operations/{existing.get('operation_id')}"
+                                          if bound_here else None),
+                        },
+                    }
                 if existing.get("fingerprint") != check.fingerprint:
                     return {
                         "status": "conflict",
@@ -360,32 +395,6 @@ class ShelfStore:
                         "operation_id": existing.get("operation_id"),
                     }
                 op = self.get_operation(existing["operation_id"])
-                # A replay is a historical receipt, but it must not be a *success* answer for an
-                # address that has since been retired: the receipt's own blob URL would answer 410
-                # while this response said 200. The operation stays readable at
-                # /v1/operations/{id}; what changes is that a retry after eviction is told the
-                # object is gone instead of being handed a happy receipt for it.
-                tomb = self.tombstone_of(check.sha256)
-                if tomb is not None:
-                    return {
-                        "status": "refused",
-                        "http": 409,
-                        "error": "DIGEST_TOMBSTONED",
-                        "message": (
-                            f"{check.sha256} was accepted earlier (operation "
-                            f"{existing.get('operation_id')}) and has since been evicted: the digest "
-                            "address is retired, so this retry cannot replay a success receipt for "
-                            "it. Publish different bytes, or lift the tombstone."
-                        ),
-                        "tombstone": tomb,
-                        "operation_id": existing.get("operation_id"),
-                        "sha256": check.sha256,
-                        "filename": check.filename,
-                        "urls": {
-                            "blob": f"/v1/blobs/{check.sha256}",
-                            "operation": f"/v1/operations/{existing.get('operation_id')}",
-                        },
-                    }
                 return {"status": "replay", "http": 200, "receipt": op}
 
             # A tombstoned digest is a retired address. Accepting the same bytes again would put a
