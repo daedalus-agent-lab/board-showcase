@@ -641,6 +641,99 @@ class UploadTests(unittest.TestCase):
         )
         self.assertEqual(res["http"], 422)
 
+    def test_a_retired_digest_is_not_masked_by_a_full_shelf(self):
+        """The ordering of two refusals, measured through the handler.
+
+        A tombstoned digest was answered 422 "over quota" on a full shelf, because the validation
+        gate — which carries the quota count — ran before the store's tombstone check. Both are
+        refusals, so nothing false was served; but a full shelf is transient and a retired digest is
+        not, and the client told to free space would free the whole shelf and still be refused. The
+        cause that cannot be fixed by waiting must be the one named.
+        """
+        import importlib
+        import json as _json
+        import os
+        import threading
+        import urllib.error
+        import urllib.request
+        from http.server import HTTPServer
+
+        from shelf_lib import MAX_LIVE_OBJECTS, sha256_hex
+
+        root = Path(self.tmp.name) / "api-retired"
+        os.environ["SHELF_DATA"] = str(root / "data")
+        os.environ["SHELF_PUBLIC"] = str(root / "public")
+        api = importlib.import_module("shelf_api")
+        importlib.reload(api)
+
+        # Fill the shelf to its ceiling with one object that is retired afterwards, so the digest
+        # exists in the store's history and the shelf is full at the same time.
+        retire_body = b"# retired, and the shelf is full\n"
+        for i in range(MAX_LIVE_OBJECTS):
+            body = retire_body if i == 0 else f"# filler {i}\n".encode()
+            key = f"key-mask{i:04d}-00001"
+            c = check_package(
+                content=body, declared_sha256=sha256_hex(body), declared_bytes=len(body),
+                name=f"card m{i}.md", filename=f"m{i}.md",
+                provenance={"thread": "8246bf16-1f79-466c-b757-0d011c414fdb"},
+                author="tester", consent="Host this file on the board-showcase shelf.",
+                principal="tester-agent", shelf_live_bytes=0, shelf_live_count=0,
+                idempotency_key=key)
+            api.STORE.accept(content=body, check=c, principal="tester-agent", idempotency_key=key)
+        self.assertEqual(api.STORE.served_totals()[1], MAX_LIVE_OBJECTS, "fixture: shelf is full")
+
+        # Retire it the way the operator's tool does: tombstone, then drop the row.
+        digest = sha256_hex(retire_body)
+        (api.STORE.tombstones / f"{digest}.json").write_text(_json.dumps({
+            "sha256": digest, "state": "evicted", "filename": "m0.md", "bytes": len(retire_body),
+            "evicted_at": "2026-09-11T00:00:00Z", "evicted_by": "tester", "reason": "fixture",
+        }))
+        man = _json.loads(api.STORE.manifest_path.read_text())
+        man["artifacts"] = [a for a in man.get("artifacts", []) if a.get("sha256") != digest]
+        api.STORE.manifest_path.write_text(_json.dumps(man, indent=2, sort_keys=True))
+        self.assertEqual(api.STORE.served_totals()[1], MAX_LIVE_OBJECTS - 1)
+        api.STORE.accept(content=b"# refill so the ceiling is reached again\n",
+                         check=check_package(
+                             content=b"# refill so the ceiling is reached again\n",
+                             declared_sha256=sha256_hex(b"# refill so the ceiling is reached again\n"),
+                             declared_bytes=len(b"# refill so the ceiling is reached again\n"),
+                             name="card refill.md", filename="refill.md",
+                             provenance={"thread": "8246bf16-1f79-466c-b757-0d011c414fdb"},
+                             author="tester", consent="Host this file on the board-showcase shelf.",
+                             principal="tester-agent", shelf_live_bytes=0, shelf_live_count=0,
+                             idempotency_key="key-refill-000001"),
+                         principal="tester-agent", idempotency_key="key-refill-000001")
+        self.assertGreaterEqual(api.STORE.served_totals()[1], MAX_LIVE_OBJECTS,
+                                "fixture: over the ceiling, so the quota gate would refuse")
+
+        srv = HTTPServer(("127.0.0.1", 0), api.Handler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            payload = _json.dumps({
+                "sha256": digest, "bytes": len(retire_body),
+                "name": "retired", "filename": "m0.md",
+                "provenance": {"thread": "8246bf16-1f79-466c-b757-0d011c414fdb"},
+                "author": "tester",
+                "consent": "Host this file on the board-showcase shelf.",
+                "content": retire_body.decode(),
+            }).encode()
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{srv.server_port}/v1/artifacts", data=payload,
+                headers={"Content-Type": "application/json",
+                         "Idempotency-Key": "key-masked-000001"})
+            try:
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    code, answer = r.status, r.read()
+            except urllib.error.HTTPError as e:
+                code, answer = e.code, e.read()
+        finally:
+            srv.shutdown()
+
+        parsed = _json.loads(answer)
+        self.assertEqual(code, 409, f"a retired digest got {code}: {answer[:200]}")
+        self.assertEqual(parsed.get("error"), "DIGEST_TOMBSTONED",
+                         "a transient cause answered for a permanent one")
+
     def test_the_small_lane_also_enforces_against_what_the_shelf_holds(self):
         """The other door, exercised rather than assumed.
 

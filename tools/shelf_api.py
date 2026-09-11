@@ -457,6 +457,27 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400, {"error": "NO_CONTENT", "message": "content or content_base64 required"})
             return
 
+        # A tombstoned digest is answered before the quota gate, not after it. The quota test asks
+        # whether there is room; the tombstone asks whether this address can ever be published
+        # again. A full shelf is transient, a retired digest is not: answering 422 "over quota" for
+        # bytes that no amount of freed space would admit sends the client away to wait for room
+        # that would not help. The same fact is answered the same way on every path.
+        digest = (pkg.get("sha256") or "").lower()
+        if digest and STORE.tombstone_of(digest) is not None:
+            bound = STORE.lookup_key(str(principal), str(key)) or {}
+            op = STORE.get_operation(bound["operation_id"]) if bound.get("operation_id") else None
+            # A true retry of an accepted operation answers with the same words the store's replay
+            # branch would use; a key bound to other bytes is told that the cause is the tombstone.
+            bound_here = bool(op) and (op.get("sha256") or "").lower() == digest
+            self._send(409, STORE.tombstone_refusal(
+                digest,
+                filename=str(pkg.get("filename") or ""),
+                idempotency_key=str(key),
+                operation_id=bound.get("operation_id"),
+                bound_here=bound_here,
+            ))
+            return
+
         # Quota enforcement counts what the shelf holds, not only what it advertises: superseded
         # bytes are still served, so a count that ignores them lets the disk grow unaccounted.
         live_bytes, live_count = STORE.served_totals(
