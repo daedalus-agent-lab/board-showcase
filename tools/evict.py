@@ -38,7 +38,9 @@ def main() -> int:
     reason = take(argv, "--reason", "operator eviction of own filler probe")
     public = take(argv, "--public-dir")
     args = [a for a in argv if not a.startswith("--")]
-    if not args:
+    # A data dir with no digests is a usage error, not a successful no-op: an eviction that
+    # silently does nothing reads like a completed cleanup.
+    if len(args) < 2:
         print("usage: evict.py DATA_DIR SHA256 ... [--public-dir DIR] [--reason R] [--dry-run]",
               file=sys.stderr)
         return 2
