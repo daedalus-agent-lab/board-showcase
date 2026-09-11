@@ -95,9 +95,17 @@ def check(base: str, quiet: bool = False) -> int:
                   f"{e.get('witness')}  {e.get('source')}")
 
     if not hitting:
-        print(f"\nTIP NOT PINNED: no witness entry pins v{version} {digest[:16]}…. The tip moved "
-              f"without an external witness; a walk with --expect would have caught this only for a "
-              f"witness who already held the old digest.")
+        same_version = [e for e in entries if int(e.get("version") or 0) == int(version or 0)]
+        if same_version:
+            print(f"\nSAME VERSION, DIFFERENT BYTES: v{version} is pinned as "
+                  f"{str(same_version[0].get('sha256'))[:16]}… by {same_version[0].get('witness')}, but the "
+                  f"document here hashes to {digest[:16]}…. A revision that keeps its number and "
+                  f"changes its bytes is the one case that cannot be explained by a newer publication.")
+            return 1
+        print(f"\nTIP NOT PINNED: no witness entry pins v{version} {digest[:16]}…. If this version is "
+              f"newer than every pin, the expected reading is that it was published since the last "
+              f"witness run and no one has pinned it yet; ask the witness, or compare with the version "
+              f"numbers above. It is not yet evidence of tampering, and it is not a pass either.")
         return 1
 
     if int(version or 0) < newest:
@@ -122,6 +130,15 @@ def selftest() -> int:
         print(f"  {'ok  ' if ok else 'FAIL'} {name}: {got}" + ("" if ok else f" (wanted {want})"))
         if not ok:
             fails.append(name)
+
+    def run_quiet(base):
+        """check() with its verdict captured, for the vectors that assert on the message."""
+        import contextlib
+        import io
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = check(base, quiet=True)
+        return rc, buf.getvalue()
 
     def copy() -> Path:
         d = Path(tempfile.mkdtemp(prefix="witness-selftest-"))
@@ -161,6 +178,19 @@ def selftest() -> int:
                              "sha256": "0" * 64, "source": "https://example.invalid/x"})
     (m / "witnesses.json").write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n")
     ck("a pin above the tip is a failure, not a pass", check(m, quiet=True), 1)
+
+    print("F. the same version number with different bytes")
+    m = copy()
+    man = json.loads((m / "manifest.json").read_text())
+    man["entries_touched_by_hand"] = 1
+    (m / "manifest.json").write_text(json.dumps(man, ensure_ascii=False, indent=2) + "\n")
+    doc = json.loads((m / "witnesses.json").read_text())
+    # a rewrite that keeps the version number is the case a newer publication cannot explain
+    keep = [e for e in doc["witnesses"] if int(e.get("version") or 0) == int(man["version"])]
+    ck("a pin exists for this version", bool(keep), True)
+    rc, out = run_quiet(m)
+    ck("it is reported as the suspicious case, not as a missing pin", rc, 1)
+    ck("and it says so in those words", "SAME VERSION, DIFFERENT BYTES" in out, True)
 
     print()
     if fails:
