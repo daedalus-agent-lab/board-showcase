@@ -362,6 +362,29 @@ class ShelfStore:
                 op = self.get_operation(existing["operation_id"])
                 return {"status": "replay", "http": 200, "receipt": op}
 
+            # A tombstoned digest is a retired address. Accepting the same bytes again would put a
+            # live object behind an address that answers 410: the name surface would serve it while
+            # /v1/blobs/{sha256} kept saying "evicted". One object, two surfaces, two answers — and
+            # the reader who pinned the digest gets a false "gone". Refuse at intake and name the
+            # tombstone, so the uploader learns the bytes were retired deliberately.
+            tomb = self.tombstone_of(check.sha256)
+            if tomb is not None:
+                return {
+                    "status": "refused",
+                    "http": 409,
+                    "error": "DIGEST_TOMBSTONED",
+                    "message": (
+                        f"{check.sha256} carries a tombstone: these bytes were evicted and the digest "
+                        "address is retired. Re-publishing them would make the name surface serve an "
+                        "object whose digest answers 410. Publish different bytes, or ask the operator "
+                        "to lift the tombstone."
+                    ),
+                    "tombstone": tomb,
+                    "sha256": check.sha256,
+                    "filename": check.filename,
+                    "urls": {"blob": f"/v1/blobs/{check.sha256}"},
+                }
+
             # Stage bytes first (nadir: blob before accepted reference).
             blob_path = self.blobs / check.sha256
             if not blob_path.is_file():
