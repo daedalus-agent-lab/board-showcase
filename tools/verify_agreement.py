@@ -133,6 +133,17 @@ class Offline:
             return 200 if (self.data / "blobs" / digest).is_file() else 404
         return 200 if (self.data / "blobs" / digest).is_file() else 404
 
+    def mirror_miss(self, filename: str) -> tuple[int, dict]:
+        """The receipt the mirror's error handler would produce for this name (offline twin of the
+        live reader). Without this the offline check verified only the *status* of a withdrawal and
+        a shelf whose mirrored 404 carried the wrong tombstone — or none — passed here and failed in
+        front of a reader."""
+        try:
+            from shelf_store import ShelfStore
+            return ShelfStore(self.data, self.public).mirror_miss_receipt(filename)
+        except Exception:  # noqa: BLE001
+            return 0, {"state": "unreadable"}
+
     def mirror_bytes(self, filename: str) -> bytes | None:
         return self.mirror(filename)
 
@@ -141,6 +152,23 @@ class Offline:
             return None
         p = self.public / "tombstones.json"
         return json.loads(p.read_text()) if p.is_file() else None
+
+    def mirror_status(self, filename: str) -> int:
+        """The status the static mirror would answer with, receipt included.
+
+        Offline this is the store's own receipt function — the same code the mirror's error handler
+        asks — so a check that passes here and fails live would mean the two disagree about the
+        receipt, not about the bytes. Any failure to read is 0, which every check reads as UNKNOWN.
+        """
+        if not self.public:
+            return 0
+        if (self.public / filename).is_file():
+            return 200
+        try:
+            from shelf_store import ShelfStore
+            return ShelfStore(self.data, self.public).mirror_miss_receipt(filename)[0]
+        except Exception:  # noqa: BLE001
+            return 0
 
 
 # --------------------------------------------------------------------------- live surfaces
@@ -196,6 +224,14 @@ class Live:
     def mirror_index(self) -> dict | None:
         code, body = self._get(f"{self.mirror}/tombstones.json")
         return json.loads(body) if code == 200 else None
+
+    def mirror_miss(self, filename: str) -> tuple[int, dict]:
+        """What a reader gets for a name the mirror cannot serve — the 404 and its body."""
+        code, body = self._get(f"{self.mirror}/{filename}")
+        try:
+            return code, json.loads(body)
+        except Exception:  # noqa: BLE001
+            return code, {"_unparsable": body[:120].decode("utf-8", "replace")}
 
 
 # --------------------------------------------------------------------------- the invariants
@@ -291,6 +327,47 @@ def check(surface, rep: Report, *, limit: int | None = None, strict: bool = Fals
     else:
         rep.add("R4 never-published digest is 404", PASS if status_blob == 404 else FAIL,
                 f"/v1/blobs/{ghost[:12]} -> {status_blob}")
+
+    # R5: remotik's rule — a withdrawal is not "no bytes at this URL", it is one tombstone for
+    # every GET surface. A surface that answers 404 for a withdrawn object tells the reader the
+    # object never existed, which is a different and false statement. This is the check that has to
+    # fail on a shelf whose mirror is a bare file server, and it did until the error handler existed.
+    wrong_status = []
+    same_receipt = []
+    for t in tombs:
+        digest = t.get("sha256")
+        if not digest:
+            continue
+        for label, status in (("/v1/blobs", surface.blob_status(digest)),
+                              ("/v1/by-sha256", surface.lookup_status(digest))):
+            if status == 0:
+                wrong_status.append(f"{label}/{digest[:12]} unreachable (UNKNOWN)")
+            elif status != 410:
+                wrong_status.append(f"{label}/{digest[:12]} -> {status}, not 410")
+        name = t.get("filename")
+        if name and name not in live_names:
+            status = surface.mirror_status(name)
+            if status == 0:
+                wrong_status.append(f"mirror/{name} unreachable (UNKNOWN)")
+            elif status != 410:
+                wrong_status.append(f"mirror/{name} -> {status}, not 410")
+            elif hasattr(surface, "mirror_miss"):
+                code, body = surface.mirror_miss(name)
+                if body.get("state") != "evicted":
+                    same_receipt.append(f"mirror/{name} answers {code} with {body.get('state')!r}")
+                else:
+                    got = (body.get("tombstone") or {}).get("sha256")
+                    if got and got != digest:
+                        same_receipt.append(
+                            f"mirror/{name} carries {str(got)[:12]} not {digest[:12]}")
+    unknown_status = [w for w in wrong_status if w.endswith("(UNKNOWN)")]
+    real_status = [w for w in wrong_status if not w.endswith("(UNKNOWN)")]
+    verdict = FAIL if real_status else (UNKNOWN if unknown_status else PASS)
+    rep.add("R5 every read surface answers 410 for a withdrawn object", verdict,
+            "; ".join((real_status + unknown_status)[:5]))
+    if hasattr(surface, "mirror_miss"):
+        rep.add("R5b the mirror's 410 carries the same tombstone, not a bare miss",
+                FAIL if same_receipt else PASS, "; ".join(same_receipt[:5]))
 
     # A2: the mirror's own withdrawal index must carry every tombstone.
     index = surface.mirror_index()

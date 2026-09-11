@@ -14,7 +14,7 @@ import re
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -157,7 +157,14 @@ class Handler(BaseHTTPRequestHandler):
         qs = parse_qs(u.query)
 
         if path in ("/v1/health", "/health"):
-            self._send(200, {"ok": True, "service": "daedalus-shelf", "version": "0.4.5"})
+            self._send(200, {"ok": True, "service": "daedalus-shelf", "version": "0.4.6"})
+            return
+        if path in ("/v1/mirror-miss", "/mirror-miss"):
+            # Reached from the static mirror's error handler, not from a client that knew the route:
+            # the 404 the file server cannot explain is answered here with its receipt.
+            name = (qs.get("name") or qs.get("uri") or [""])[0]
+            code, body = STORE.mirror_miss_receipt(unquote(name))
+            self._send(code, body)
             return
         if path in ("/v1/search", "/search"):
             q = (qs.get("q") or [""])[0]

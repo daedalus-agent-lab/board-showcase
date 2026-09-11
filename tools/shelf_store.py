@@ -615,6 +615,48 @@ class ShelfStore:
         }
         _write_json(self.search_path, obj)
 
+    def mirror_miss_receipt(self, name: str) -> tuple[int, dict[str, Any]]:
+        """Answer for a name the static mirror cannot serve, with the receipt it would otherwise lack.
+
+        A static file server has no memory: its 404 collapses "withdrawn" and "never existed" into one
+        bare answer, which is the amnesia the tombstones exist to break — but a receipt on a *different*
+        surface only helps a reader who already knows where to look. The mirror's error handler asks
+        this, so the 404 itself carries the distinction.
+        """
+        name = (name or "").strip().lstrip("/")
+        if name.startswith("board-showcase/"):
+            name = name.split("board-showcase/", 1)[1]
+        if not name:
+            return 404, {"state": "no-name", "error": "MIRROR_MISS",
+                         "detail": "no file name was supplied"}
+        for p in sorted(self.tombstones.glob("*.json")):
+            t = _read_json(p)
+            if t.get("filename") == name:
+                return 410, {
+                    "state": "evicted",
+                    "name": name,
+                    "detail": ("this name was served here and is now withdrawn; the blob stays on "
+                               "disk and /v1/blobs/{sha256} answers 410 from the same tombstone"),
+                    "tombstone": t,
+                }
+        man = self.load_manifest()
+        for a in man.get("artifacts") or []:
+            fname = a.get("filename") or _filename_from_live(a.get("live"))
+            if fname == name and a.get("sha256"):
+                return 404, {"state": "live-elsewhere", "name": name,
+                             "detail": "no copy is published at this path; the object is in the "
+                                       "catalog",
+                             "sha256": a["sha256"],
+                             "blobs": f"/v1/blobs/{a['sha256']}"}
+        return 404, {
+            "state": "no-record",
+            "name": name,
+            "detail": ("this shelf has no record of the name: it was never accepted here, or it was "
+                       "placed in the web root outside the catalog and removed. Withdrawal leaves a "
+                       "tombstone; this is the absence of one."),
+            "tombstones_index": "/board-showcase/tombstones.json",
+        }
+
     def tombstone_index(self) -> dict[str, Any]:
         """Withdrawal receipts for the static mirror, keyed by digest and by filename.
 

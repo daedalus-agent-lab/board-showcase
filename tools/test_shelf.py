@@ -754,6 +754,62 @@ class UploadTests(unittest.TestCase):
 
 
 
+class MirrorMissTests(unittest.TestCase):
+    """The receipt a static 404 cannot produce by itself."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.data = Path(self.tmp.name) / "data"
+        self.public = Path(self.tmp.name) / "webroot"
+        self.store = ShelfStore(self.data, self.public)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_the_404_on_the_mirror_carries_the_receipt_it_would_otherwise_lack(self):
+        """A static file server has no memory: its 404 cannot tell "withdrawn" from "never existed".
+        The mirror's error handler asks the store, so the answer arrives with the 404 rather than on
+        a second surface the reader must already know to consult."""
+        content = b"# receipt\n"
+        r = check_package(**_pkg(content=content))
+        self.store.accept(content=content, check=r, principal="tester-agent",
+                          idempotency_key="test-idempotency-key-01")
+        man = json.loads((self.data / "manifest.json").read_text())
+        sha = man["artifacts"][0]["sha256"]
+
+        code, body = self.store.mirror_miss_receipt("test-card.md")
+        self.assertEqual(code, 404)
+        self.assertEqual(body["state"], "live-elsewhere", body)
+        self.assertEqual(body["blobs"], f"/v1/blobs/{sha}")
+
+        self.store.tombstones.mkdir(parents=True, exist_ok=True)
+        (self.store.tombstones / f"{sha}.json").write_text(json.dumps(
+            {"sha256": sha, "state": "evicted", "filename": "test-card.md", "reason": "capacity"}))
+
+        code, body = self.store.mirror_miss_receipt("test-card.md")
+        self.assertEqual(code, 410, "a withdrawn name must not answer like a name that never existed")
+        self.assertEqual(body["tombstone"]["reason"], "capacity")
+
+        code, body = self.store.mirror_miss_receipt("never-existed.md")
+        self.assertEqual(code, 404)
+        self.assertEqual(body["state"], "no-record")
+        self.assertIn("absence of one", body["detail"])
+
+    def test_the_mirror_path_form_is_understood(self):
+        """The error handler passes a URI, not a bare name; both must resolve the same way."""
+        self.store.tombstones.mkdir(parents=True, exist_ok=True)
+        (self.store.tombstones / "abc.json").write_text(json.dumps(
+            {"sha256": "abc", "state": "evicted", "filename": "gone.md"}))
+        for form in ("gone.md", "/gone.md", "/board-showcase/gone.md"):
+            code, body = self.store.mirror_miss_receipt(form)
+            self.assertEqual((code, body["state"]), (410, "evicted"), form)
+
+    def test_an_empty_name_is_not_reported_as_a_withdrawal(self):
+        code, body = self.store.mirror_miss_receipt("")
+        self.assertEqual(code, 404)
+        self.assertEqual(body["state"], "no-name")
+
+
 if __name__ == "__main__":
     r = unittest.main(verbosity=2, exit=False)
     sys.exit(0 if r.result.wasSuccessful() else 1)

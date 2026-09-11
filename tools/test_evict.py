@@ -280,6 +280,60 @@ class EvictionTests(unittest.TestCase):
 
     # ---------------------------------------------------------------- the record
 
+    def test_the_tombstone_receipt_on_the_mirror_is_regenerated_not_appended(self):
+        """The fork: is the mirror's receipt a projection or a second write surface?
+
+        If eviction appended to the mirror's tombstones.json, a future eviction that wrote the
+        tombstone but forgot the index would reproduce the original defect on the receipt instead of
+        on the bytes. This writes a tombstone straight into the authoritative directory and touches
+        nothing else: if the receipt is a projection, the next publish carries it to the mirror with
+        no help from any eviction-side code path.
+        """
+        self.accept("live.md", "# live\n", "key-live0000000001")
+        self.publish()
+        before = json.loads((self.public / "tombstones.json").read_text())
+        self.assertEqual(before["by_sha256"], {})
+
+        (self.data / "tombstones").mkdir(exist_ok=True)
+        (self.data / "tombstones" / "deadbeef.json").write_text(json.dumps(
+            {"sha256": "deadbeef", "state": "evicted", "filename": "never-served.md",
+             "evicted_at": "2026-01-01T00:00:00Z"}))
+
+        self.publish()
+
+        after = json.loads((self.public / "tombstones.json").read_text())
+        self.assertEqual(list(after["by_sha256"]), ["deadbeef"],
+                         "the receipt did not follow the authoritative directory")
+        self.assertEqual(after["by_name"]["never-served.md"][0]["sha256"], "deadbeef")
+        published = json.loads((self.public / "published.json").read_text())
+        self.assertIn("tombstones.json", published["files"],
+                      "the receipt is written by publish, not by the eviction path")
+
+    def test_a_withdrawn_name_is_swept_by_the_projection_not_by_the_tool(self):
+        """Eviction states what should disappear and checks it afterwards; publish removes it."""
+        self.accept("doomed.md", "# doomed\n", "key-doomed00000001")
+        self.publish()
+        man = json.loads((self.data / "manifest.json").read_text())
+        row = man["artifacts"][0]
+        r = self.evict(row["sha256"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("STILL SERVED", r.stdout)
+        self.assertFalse((self.public / "doomed.md").exists())
+        self.assertTrue((self.data / "blobs" / row["sha256"]).is_file(),
+                        "eviction destroyed the blob; it must stay recoverable")
+
+    def test_eviction_does_not_claim_a_removal_it_did_not_perform(self):
+        """The log used to print 'remove mirror <path> exists=True' and delete nothing, because the
+        deletion had moved into publish_public(). A line that reports a side effect nobody performs
+        is worse than no line: it is read as the record that the cleanup happened."""
+        self.accept("ghost.md", "# ghost\n", "key-ghost000000001")
+        self.publish()
+        man = json.loads((self.data / "manifest.json").read_text())
+        r = self.evict(man["artifacts"][0]["sha256"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("remove mirror", r.stdout)
+        self.assertIn("withdrawn by the projection sweep", r.stdout)
+
     def test_tombstone_records_reason_and_time_and_manifest_drops_the_entry(self):
         sha = self.accept("record.md", "# recorded\n", "key-record-00000001")
         self.publish()

@@ -57,7 +57,7 @@ def main() -> int:
     still_used = {a.get("filename") or _filename_from_live(a.get("live"))
                   for a in arts if a.get("sha256") not in doomed}
 
-    evicted, mirror_removed, mirror_kept = [], [], []
+    evicted, mirror_expected, mirror_kept = [], [], []
     for sha in sorted(doomed):
         a = index[sha]
         name = a.get("filename") or _filename_from_live(a.get("live"))
@@ -67,14 +67,15 @@ def main() -> int:
         if name in still_used:
             mirror_kept.append(name)
         else:
-            mirror_removed.append(name)
+            mirror_expected.append(name)
         print(f"evict {sha[:12]} {name} {a.get('bytes')}B")
 
-    if public:
-        root = Path(public)
-        for name in mirror_removed:
-            p = root / name
-            print(("would remove" if dry else "remove") + f" mirror {p} exists={p.is_file()}")
+    # This tool no longer deletes mirror files: publish_public() is a projection, and a second
+    # deleter is the second write surface that reappears as drift the first time one of the two
+    # paths is skipped. What this tool must do is state what it expects and then report what
+    # actually happened — an earlier version printed "remove mirror" while removing nothing.
+    if mirror_expected and not dry:
+        print(f"withdrawn by the projection sweep: {' '.join(mirror_expected)}")
     print(f"mirror kept (filename still live elsewhere): {mirror_kept}")
     orphans = store.orphan_totals()
     if orphans[1]:
@@ -114,9 +115,15 @@ def main() -> int:
     after_b, after_n = store.live_totals()
     print(f"live objects {before_n} -> {after_n}; live bytes {before_b} -> {after_b}")
     print(f"tombstones {len(list(store.tombstones.glob('*.json')))}; not found {missing}")
+    # The expectation is checked against the result, so an eviction whose copy stays served says so
+    # here instead of leaving the mirror and the catalog disagreeing in silence.
+    missed = [n for n in mirror_expected if (store.public_dir / n).is_file()] if store.public_dir else []
     if swept:
         print(f"mirror swept {len(swept)} stale file(s): {' '.join(swept[:5])}"
               + (" …" if len(swept) > 5 else ""))
+    if missed:
+        print(f"STILL SERVED after eviction: {' '.join(missed)} — the copy outlived the catalog row")
+        return 1
     return 0
 
 

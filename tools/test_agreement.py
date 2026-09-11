@@ -251,6 +251,77 @@ class AgreementTests(unittest.TestCase):
         self.assertIn("UNKNOWN", out)
         self.assertNotIn("0 blob(s), 0 bytes", out)
 
+    def test_a_withdrawn_object_answers_410_on_every_read_surface(self):
+        """remotik's rule: withdrawal is not 'no bytes at this URL', it is one tombstone for every
+        surface. This is the happy path of R5 — the object is gone from the mirror, and every
+        surface still says *withdrawn* rather than *never existed*."""
+        sha = self.accept("gone.md", "# gone\n", "key-gone0000000001")
+        self.publish()
+        subprocess.run([sys.executable, str(HERE / "evict.py"), str(self.data), sha,
+                        "--public-dir", str(self.public), "--reason", "test"],
+                       capture_output=True, text=True, timeout=180)
+
+        code, out = self.run_check()
+
+        self.assertEqual(code, 0, out)
+        self.assertIn("R5 every read surface answers 410 for a withdrawn object", out)
+        self.assertIn("R5b", out)
+        self.assertNotIn("FAIL", out)
+
+    def test_a_bare_404_on_the_mirror_fails_the_withdrawal_rule(self):
+        """The discriminating half: a static file server that answers a bare 404 for a withdrawn
+        name tells the reader the object never existed. That is a false statement about the shelf,
+        and the check has to reject it rather than call the surfaces agreed."""
+        import http.server
+        import threading
+
+        digest = "a" * 64
+
+        class Stub(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802
+                if self.path == "/mirror/manifest.json":
+                    return self._json(200, {"artifacts": []})
+                if self.path == "/mirror/tombstones.json":
+                    return self._json(200, {"by_sha256": {digest: {"sha256": digest,
+                                                                   "filename": "withdrawn.md"}},
+                                            "by_name": {}})
+                if self.path.startswith("/api/v1/blobs/") or self.path.startswith("/api/v1/by-sha256/"):
+                    return self._json(410, {"state": "evicted", "tombstone": {"sha256": digest}})
+                if self.path == "/api/v1/shelf/agreement":
+                    return self._json(200, {"orphans": {"count": 0, "bytes": 0}})
+                # A plain file server: no receipt, no memory.
+                body = b"404 page not found\n"
+                self.send_response(404)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def _json(self, code, obj):
+                body = json.dumps(obj).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        srv = http.server.HTTPServer(("127.0.0.1", 0), Stub)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            base = f"http://127.0.0.1:{srv.server_port}"
+            r = subprocess.run([sys.executable, str(CHECK), "--api", f"{base}/api",
+                                "--mirror", f"{base}/mirror", "--limit", "0"],
+                               capture_output=True, text=True, timeout=180)
+        finally:
+            srv.shutdown()
+        out = r.stdout + r.stderr
+        self.assertEqual(r.returncode, 1, out)
+        self.assertIn("R5 every read surface answers 410", out)
+        self.assertIn("mirror/withdrawn.md -> 404, not 410", out)
+        self.assertIn("R5b", out)
+
     def test_missing_data_directory_is_not_a_pass(self):
         cmd = [sys.executable, str(CHECK), "--data", str(Path(self.tmp.name) / "nope")]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
