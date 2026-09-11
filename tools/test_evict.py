@@ -185,6 +185,14 @@ class EvictionTests(unittest.TestCase):
         self.assertNotIn(old, counted, "if orphans now count toward quota, update this test")
         self.assertEqual((self.public / "same.md").read_bytes(), b"# new\n")
 
+        # What the tool must not hide: the served-but-uncounted bytes, named in its own summary.
+        self.assertEqual(self.store.orphan_totals(), (len(b"# old\n"), 1))
+        r = self.evict(old)
+        self.assertIn("served but uncounted", r.stdout)
+        self.assertIn("1 blob(s)", r.stdout)
+        self.assertEqual(self.store.orphan_totals(), (len(b"# old\n"), 1),
+                         "reporting an orphan must not change the count")
+
     # ---------------------------------------------------------------- the record
 
     def test_tombstone_records_reason_and_time_and_manifest_drops_the_entry(self):

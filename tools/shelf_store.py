@@ -126,6 +126,25 @@ class ShelfStore:
                 return True
         return False
 
+    def orphan_totals(self) -> tuple[int, int]:
+        """(bytes, count) of blobs that are served but appear in no manifest row and no tombstone.
+
+        These are superseded objects: accepting a new artifact under an existing filename replaces
+        the older row, and nothing writes a tombstone for the digest it displaced. The bytes stay
+        served at /v1/blobs/<sha> and are labelled orphan_blob by lookup, while live_totals() — and
+        therefore the shelf quota — counts manifest rows only. Reporting them here keeps an
+        eviction decision from being made on a number that excludes part of what the shelf serves.
+        """
+        man = self.load_manifest()
+        live = {a.get("sha256") for a in man.get("artifacts") or [] if a.get("bytes") is not None}
+        total_b = count = 0
+        for p in sorted(self.blobs.glob("*")):
+            if not p.is_file() or p.name in live or self.tombstone_of(p.name):
+                continue
+            total_b += p.stat().st_size
+            count += 1
+        return total_b, count
+
     def tombstone_of(self, sha256: str) -> dict[str, Any] | None:
         p = self.tombstones / f"{sha256}.json"
         if p.is_file():

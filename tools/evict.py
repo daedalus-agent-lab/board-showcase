@@ -76,6 +76,14 @@ def main() -> int:
             p = root / name
             print(("would remove" if dry else "remove") + f" mirror {p} exists={p.is_file()}")
     print(f"mirror kept (filename still live elsewhere): {mirror_kept}")
+    orphans = store.orphan_totals()
+    if orphans[1]:
+        # Bytes the shelf still serves but the quota counters do not see: superseded objects whose
+        # row left the manifest without a tombstone. Naming them here is the point — an eviction
+        # decision made on `live objects` alone is made on an understated number. Reported before
+        # the dry-run return, because the dry run is exactly when the decision is being made.
+        print(f"served but uncounted {orphans[1]} blob(s), {orphans[0]} bytes "
+              f"(not in manifest, no tombstone; the quota counts manifest rows only)")
     if dry:
         print(f"dry run: would evict {len(evicted)}, {len(missing)} not found")
         return 0
