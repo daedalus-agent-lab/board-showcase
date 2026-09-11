@@ -291,6 +291,48 @@ class ShelfStore:
                 count += 1
         return total_b, count
 
+    def tombstone_refusal(
+        self,
+        sha256: str,
+        *,
+        filename: str | None = None,
+        idempotency_key: str | None = None,
+        operation_id: str | None = None,
+        bound_here: bool = False,
+    ) -> dict[str, Any]:
+        """The one shape of refusal for a retired digest address.
+
+        Every path that meets a tombstone answers with this, so the client cannot get two different
+        accounts of the same fact: intake, the idempotency-replay branch, the API's pre-check before
+        the quota gate, and the large lane's init.
+        """
+        tomb = self.tombstone_of(sha256) or {}
+        if bound_here and operation_id:
+            tail = (f" This is a retry of operation {operation_id}, which is still readable, but it "
+                    "cannot be answered with a success receipt for an address that answers 410.")
+        elif idempotency_key:
+            tail = (f" The key {idempotency_key!r} is already bound to different bytes, but the "
+                    "cause here is the tombstone, not the key: publish different bytes, or lift the "
+                    "tombstone.")
+        else:
+            tail = (" Re-publishing these bytes would make the name surface serve an object whose "
+                    "digest answers 410. Publish different bytes, or lift the tombstone.")
+        return {
+            "status": "refused",
+            "http": 409,
+            "error": "DIGEST_TOMBSTONED",
+            "message": (f"{sha256} carries a tombstone: these bytes were evicted and the digest "
+                        "address is retired." + tail),
+            "tombstone": tomb,
+            "operation_id": operation_id if bound_here else None,
+            "sha256": sha256,
+            "filename": filename,
+            "urls": {
+                "blob": f"/v1/blobs/{sha256}",
+                "operation": f"/v1/operations/{operation_id}" if bound_here else None,
+            },
+        }
+
     def tombstone_of(self, sha256: str) -> dict[str, Any] | None:
         p = self.tombstones / f"{sha256}.json"
         if p.is_file():
@@ -358,34 +400,15 @@ class ShelfStore:
                 # quiet store and IDEMPOTENCY_CONFLICT after an unrelated write bound the key
                 # elsewhere. Both were refusals, so no retired address ever got a success answer —
                 # but a client branching on the code could not predict what it would get.
-                tomb = self.tombstone_of(check.sha256)
-                if tomb is not None:
+                if self.tombstone_of(check.sha256) is not None:
                     bound_here = existing.get("fingerprint") == check.fingerprint
-                    return {
-                        "status": "refused",
-                        "http": 409,
-                        "error": "DIGEST_TOMBSTONED",
-                        "message": (
-                            f"{check.sha256} carries a tombstone: these bytes were evicted and the "
-                            "digest address is retired."
-                            + (f" This is a retry of operation {existing.get('operation_id')}, "
-                               "which is still readable, but it cannot be answered with a success "
-                               "receipt for an address that answers 410."
-                               if bound_here else
-                               f" The key {idempotency_key!r} is already bound to different bytes, "
-                               "but the cause here is the tombstone, not the key: publish different "
-                               "bytes, or lift the tombstone.")
-                        ),
-                        "tombstone": tomb,
-                        "operation_id": existing.get("operation_id") if bound_here else None,
-                        "sha256": check.sha256,
-                        "filename": check.filename,
-                        "urls": {
-                            "blob": f"/v1/blobs/{check.sha256}",
-                            "operation": (f"/v1/operations/{existing.get('operation_id')}"
-                                          if bound_here else None),
-                        },
-                    }
+                    return self.tombstone_refusal(
+                        check.sha256,
+                        filename=check.filename,
+                        idempotency_key=idempotency_key,
+                        operation_id=existing.get("operation_id"),
+                        bound_here=bound_here,
+                    )
                 if existing.get("fingerprint") != check.fingerprint:
                     return {
                         "status": "conflict",
@@ -402,23 +425,12 @@ class ShelfStore:
             # /v1/blobs/{sha256} kept saying "evicted". One object, two surfaces, two answers — and
             # the reader who pinned the digest gets a false "gone". Refuse at intake and name the
             # tombstone, so the uploader learns the bytes were retired deliberately.
-            tomb = self.tombstone_of(check.sha256)
-            if tomb is not None:
-                return {
-                    "status": "refused",
-                    "http": 409,
-                    "error": "DIGEST_TOMBSTONED",
-                    "message": (
-                        f"{check.sha256} carries a tombstone: these bytes were evicted and the digest "
-                        "address is retired. Re-publishing them would make the name surface serve an "
-                        "object whose digest answers 410. Publish different bytes, or ask the operator "
-                        "to lift the tombstone."
-                    ),
-                    "tombstone": tomb,
-                    "sha256": check.sha256,
-                    "filename": check.filename,
-                    "urls": {"blob": f"/v1/blobs/{check.sha256}"},
-                }
+            if self.tombstone_of(check.sha256) is not None:
+                return self.tombstone_refusal(
+                    check.sha256,
+                    filename=check.filename,
+                    idempotency_key=idempotency_key,
+                )
 
             # Stage bytes first (nadir: blob before accepted reference).
             blob_path = self.blobs / check.sha256
