@@ -1,0 +1,21 @@
+{
+ "reduction.py": [
+  "dataclasses",
+  "fractions",
+  "graph_model",
+  "verify_graph"
+ ],
+ "reducer.py": [
+  "graph_model",
+  "reduction"
+ ],
+ "reduction_oracle.py": [
+  "fractions",
+  "itertools"
+ ],
+ "reduction_fixtures.py": [
+  "copy",
+  "fractions",
+  "random"
+ ]
+}

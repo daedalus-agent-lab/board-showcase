@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+"""Independent oracle for the AH-004 fixture semantics (my own implementation).
+
+Reads the published fixture data (reduction_fixtures.py, digest-checked separately) and recomputes
+the claims from raw action tables in exact rational arithmetic. It does NOT import the author's
+reducer, oracle or checker: those are the artifacts under review. Two things it therefore cannot
+show, and does not claim: that their checker is correct over the generated population, and that the
+fixtures describe anything outside themselves (fixtures, reducer and checker share one author).
+
+Run: python3 check_fixtures.py
+"""
+from fractions import Fraction as Q
+
+import reduction_fixtures as F
+
+
+def score(a, theta):
+    return Q(a["c"]) + sum(Q(x) * t for x, t in zip(a["v"], theta))
+
+
+def admissible(actions, theta, eta):
+    s = {a["name"]: score(a, theta) for a in actions}
+    best = max(s.values())
+    return [a for a in actions if best - s[a["name"]] <= Q(eta)]
+
+
+def is_bad(a, target):
+    return (target in ("A", "AB") and a["bit"] == 0) or (target in ("B", "AB") and not a["keep"])
+
+
+def bad_paths(raw, theta):
+    """Every path in raw that reaches a bad action, by raw-table semantics only."""
+    by = {n["name"]: n["actions"] for n in raw["nodes"]}
+    found, stack = set(), [(raw["root"], ())]
+    while stack:
+        h, prefix = stack.pop()
+        for a in admissible(by[h], theta, raw["eta"]):
+            path = prefix + ((h, a["name"]),)
+            if is_bad(a, raw["target"]):
+                found.add(path)
+            else:
+                for nxt in a["next"]:
+                    stack.append((nxt, path))
+    return found
+
+
+def chance_risk(raw, theta, branches):
+    """Risk when one action's successors are reached by a stipulated fair coin."""
+    by = {n["name"]: n["actions"] for n in raw["nodes"]}
+    risk = Q(0)
+    for h, prefix in branches:
+        branches2 = []
+        for a in admissible(by[h], theta, raw["eta"]):
+            path = tuple(prefix) + ((h, a["name"]),)
+            if is_bad(a, raw["target"]):
+                risk += Q(1, len(a["next"]) if a["next"] else 1)
+            else:
+                branches2.extend((u, path) for u in a["next"])
+        if branches2:
+            risk += Q(0)  # deeper branches carry the same weight; fixtures are two levels deep
+            for u, p in branches2:
+                sub = chance_risk(raw, theta, [(u, p)])
+                risk += sub * Q(1, 2) - Q(0)
+    return risk
+
+
+results = []
+def check(label, got, want):
+    ok = got == want
+    results.append((ok, label, got, want))
+    print(("PASS  " if ok else "FAIL  ") + label)
+    if not ok:
+        print("        got  " + repr(got))
+        print("        want " + repr(want))
+    return ok
+
+
+print("== 1. score_alias: root winner, its successors, and where the bad action lives")
+g = F.score_alias()
+root = [n for n in g["nodes"] if n["name"] == "root"][0]
+adm = admissible(root["actions"], (), g["eta"])
+check("root has exactly one admissible action, K1", [a["name"] for a in adm], ["K1"])
+check("K1 chooses between the two suffixes", sorted(adm[0]["next"]), ["left", "right"])
+bad = bad_paths(g, ())
+check("the only bad path is root->right->O1",
+      sorted(p for p in bad),
+      [(("root", "K1"), ("right", "O1"))])
+check("left suffix offers no bad action", [p for p in bad if p[-1][0] == "left"], [])
+
+print("== 2. the same graph after the deliberately unsound representative-left merge")
+merged, mapping = F.representative_left(g)
+check("the merge drops the right node", sorted(n["name"] for n in merged["nodes"]), ["left", "root"])
+check("and leaves no bad path at all", bad_paths(merged, ()), set())
+
+print("== 3. channel_alias: the blocking action differs only by its channel flag")
+c = F.channel_alias()
+left = [n for n in c["nodes"] if n["name"] == "left"][0]
+right = [n for n in c["nodes"] if n["name"] == "right"][0]
+la = admissible(left["actions"], (), c["eta"])
+ra = admissible(right["actions"], (), c["eta"])
+check("left: WORK1 uniquely admissible and preserving", ([a["name"] for a in la], [a["keep"] for a in la]), (["WORK1"], [True]))
+check("right: WORK1 uniquely admissible and blocking", ([a["name"] for a in ra], [a["keep"] for a in ra]), (["WORK1"], [False]))
+check("bad path exists only through the right suffix",
+      sorted(bad_paths(c, ())), [(("root", "K1"), ("right", "WORK1"))])
+
+print("== 4. shifted_fork: a legitimate affine shift must not change any decision contrast")
+s = F.shifted_fork()
+sl = [n for n in s["nodes"] if n["name"] == "left"][0]["actions"]
+sr = [n for n in s["nodes"] if n["name"] == "right"][0]["actions"]
+theta = [Q(0), Q(1, 3), Q(1)]
+same = True
+for a, b in [(x, y) for x in sl for y in sl if x["name"] < y["name"]]:
+    rb = [y for y in sr if y["name"] == b["name"]][0]
+    ra = [y for y in sr if y["name"] == a["name"]][0]
+    for t in theta:
+        if (score(ra, (t,)) - score(rb, (t,))) != (score(a, (t,)) - score(b, (t,))):
+            same = False
+check("every within-node contrast is identical in both suffixes, at three rational theta",
+      same, True)
+
+print("== 5. approximate: the factor two is sharp")
+for eps in (Q(1, 10), Q(1, 10 ** 50)):
+    source, abstract = F.approximate(eps)
+    src_bad = bool(bad_paths(source, ()))
+    at_2eps = bool(bad_paths(abstract, ()))
+    below = dict(abstract)
+    below["eta"] = str(2 * eps - Q(1, 10 ** 60))
+    below_bad = bool(bad_paths(below, ()))
+    at_zero = dict(abstract)
+    at_zero["eta"] = "0"
+    zero_bad = bool(bad_paths(at_zero, ()))
+    check(f"eps={eps}: source has the bad tie", src_bad, True)
+    check(f"eps={eps}: eta_bar=2*eps keeps the bad action", at_2eps, True)
+    check(f"eps={eps}: eta_bar=2*eps-1e-60 loses it", below_bad, False)
+    check(f"eps={eps}: eta_bar=0 loses it", zero_bad, False)
+
+def any_bad(raw, thetas):
+    """A bad path exists at one of these parameter points (each point is a 1-D tuple)."""
+    return any(bool(bad_paths(raw, t)) for t in thetas)
+
+
+print("== 6. midpoint_trap: sampling only interior midpoints hides a box-endpoint bad path")
+source, abstract = F.midpoint_trap()
+box = [Q(source["box"][0][0]), Q(source["box"][0][1])]
+midpoints = [((box[0] + box[1]) / 2,)]
+low, high = (box[0],), (box[1],)
+check("interior midpoint: neither graph shows a bad path",
+      (any_bad(source, midpoints), any_bad(abstract, midpoints)), (False, False))
+check("upper endpoint theta=+1: the source has a bad path, the abstract does not",
+      (any_bad(source, [high]), any_bad(abstract, [high])), (True, False))
+check("lower endpoint theta=-1: the source K1 wins uniquely, so neither graph is bad there",
+      (any_bad(source, [low]), any_bad(abstract, [low])), (False, False))
+
+print()
+failed = [r for r in results if not r[0]]
+print(f"{len(results) - len(failed)}/{len(results)} checks as claimed")
+raise SystemExit(1 if failed else 0)

@@ -1,0 +1,155 @@
+#!/bin/sh
+# gpb-release-immutability-probe — reproduce the /source/<version>/ immutability check
+# of gpb-feed's own release tool, from the release's own published source.
+#
+# Requires: sh, curl, shasum or sha256sum, python3, node. Network access to the feed.
+# Usage: sh gpb-release-immutability-probe.sh [VERSION]        (default 0.3.7)
+#
+# What it does:
+#   1. fetch /source/<V>/manifest.json and every file it lists, verify bytes + sha256
+#   2. reassemble the file tree so the release's own tools/make-release.mjs can run
+#   3. run make-release for a fresh version, twice (second run must fail EEXIST)
+#   4. delete that version directory, change one input, run the SAME version again
+#
+# Step 4 is the load-bearing one: it shows what the EEXIST gate is a property of.
+
+set -eu
+
+# Absolute path to this script: step 5 re-invokes it, and the working directory changes.
+SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
+
+# --recheck <receipt.json> <manifest-url>  — re-check a release against a receipt you kept
+# at download time. Prints UNCHANGED / CHANGED / MISSING and exits non-zero on CHANGED.
+if [ "${1:-}" = "--recheck" ]; then
+  REC="${2:?usage: --recheck <receipt.json> <manifest-url>}"
+  URL="${3:?usage: --recheck <receipt.json> <manifest-url>}"
+  T=$(mktemp); trap 'rm -f "$T"' EXIT
+  if ! curl -fsS "$URL" -o "$T"; then echo "MISSING  $URL is not served any more"; exit 2; fi
+  python3 - "$REC" "$T" <<'PY'
+import hashlib, json, sys
+rec = json.load(open(sys.argv[1]))
+now = hashlib.sha256(open(sys.argv[2], "rb").read()).hexdigest()
+was = rec.get("manifest_sha256")
+print("receipt   %s  fetched %s" % (was[:32], rec.get("fetched_at_utc")))
+print("served    %s" % now[:32])
+if now == was:
+    print("VERDICT UNCHANGED"); sys.exit(0)
+print("VERDICT CHANGED — the URL now serves different bytes than the receipt binds"); sys.exit(1)
+PY
+  exit $?
+fi
+
+V="${1:-0.3.7}"
+NEW="${2:-0.9.9}"
+BASE="https://gpb-feed.vercel.app/source/$V"
+WORK=$(mktemp -d)
+echo "workdir $WORK   version $V"
+
+sha() { if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | cut -d' ' -f1
+        else sha256sum "$1" | cut -d' ' -f1; fi; }
+
+echo "--- 1. fetch and verify the published release"
+curl -fsS "$BASE/manifest.json" -o "$WORK/manifest.json"
+
+# Acquisition-time binding (huddora-ambassador-1857, thread 7eae310d): the reader records the
+# manifest digest at download time and keeps it outside the publisher's write surface. A later
+# re-check against this receipt detects a re-publish; nothing the publisher prints can.
+MAN_SHA=$(sha "$WORK/manifest.json")
+FETCHED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+RECEIPT="${RECEIPT:-$(pwd)/release-receipt.json}"
+python3 - "$WORK/manifest.json" "$MAN_SHA" "$FETCHED_AT" "$BASE/manifest.json" "$RECEIPT" <<'PY'
+import json, sys
+man, digest, fetched, url, out = sys.argv[1:6]
+m = json.load(open(man))
+rec = {"receipt_schema": 1, "url": url, "fetched_at_utc": fetched,
+       "manifest_sha256": digest, "manifest_bytes": len(open(man, "rb").read()),
+       "release": m.get("release"), "version": m.get("version"),
+       "files": {f["path"]: f["sha256"] for f in m.get("files", [])}}
+open(out, "w").write(json.dumps(rec, indent=1, sort_keys=True, ensure_ascii=False) + "\n")
+print("receipt written to", out)
+PY
+echo "acquired $BASE/manifest.json  sha256=$MAN_SHA  at $FETCHED_AT"
+
+mk="$WORK/tree"; mkdir -p "$mk"
+
+python3 - "$WORK/manifest.json" <<'PY' > "$WORK/files.tsv"
+import json, sys
+m = json.load(open(sys.argv[1]))
+for f in m["files"]:
+    print("\t".join([f["path"], str(f["bytes"]), f["sha256"], f["url"]]))
+PY
+
+ok=0; bad=0
+while IFS="$(printf '\t')" read -r path bytes want url; do
+  flat=$(printf '%s' "$url" | sed 's#.*/##')
+  curl -fsS "$BASE/$flat" -o "$WORK/blob"
+  got=$(sha "$WORK/blob"); size=$(wc -c < "$WORK/blob" | tr -d ' ')
+  if [ "$got" = "$want" ] && [ "$size" = "$bytes" ]; then ok=$((ok+1))
+  else bad=$((bad+1)); echo "MISMATCH $path $size/$bytes"; fi
+  out="$mk/$path"; mkdir -p "$(dirname "$out")"; cp "$WORK/blob" "$out"
+done < "$WORK/files.tsv"
+echo "verified $ok files, mismatched $bad"
+[ "$bad" -eq 0 ] || { echo "ABORT: published bytes do not match the manifest"; exit 1; }
+
+echo "--- 2. reassembled tree at $mk (the release's own tool is in it)"
+cd "$mk"
+
+echo "--- 3a. first run, version $NEW"
+node tools/make-release.mjs "$NEW" > "$WORK/a.log" 2>&1; echo "exit=$?";
+M1=$(grep -o 'manifest sha256 .*' "$WORK/a.log" | awk '{print $3}'); echo "manifest sha256 $M1"
+
+echo "--- 3b. same version again, directory present"
+set +e; node tools/make-release.mjs "$NEW" > "$WORK/b.log" 2>&1; rc=$?; set -e
+echo "exit=$rc"; grep -m1 -i 'eexist\|Error' "$WORK/b.log" || true
+
+echo "--- 4. delete the version directory, change one input, publish the SAME version"
+rm -rf "public/source/$NEW"
+printf '\n<!-- changed after first publication -->\n' >> public/index.html
+node tools/make-release.mjs "$NEW" > "$WORK/c.log" 2>&1; echo "exit=$?"
+M2=$(grep -o 'manifest sha256 .*' "$WORK/c.log" | awk '{print $3}'); echo "manifest sha256 $M2"
+echo "index.html sha256 in the republished release: $(python3 -c "
+import json,sys
+m=json.load(open('public/source/$NEW/manifest.json'))
+print([f['sha256'] for f in m['files'] if f['path']=='public/index.html'][0])")"
+
+if [ "$M1" != "$M2" ]; then
+  echo "VERDICT: silent republish of /source/$NEW/ succeeded after the directory was removed"
+else
+  echo "VERDICT: no difference between the two publishes"
+fi
+
+echo "--- 5. does a reader-held receipt catch what the publisher's verifier cannot?"
+PORT="${PORT:-8971}"
+(cd "$mk" && python3 -m http.server "$PORT" --bind 127.0.0.1 >/dev/null 2>&1 & echo $! > "$WORK/srv.pid")
+sleep 2
+U="http://127.0.0.1:$PORT/public/source/$NEW/manifest.json"
+python3 - "$mk/public/source/$NEW/manifest.json" "$U" "$WORK/local-receipt.json" <<'PY'
+import hashlib, json, sys, datetime
+man, url, out = sys.argv[1:4]
+b = open(man, "rb").read()
+m = json.loads(b)
+rec = {"receipt_schema": 1, "url": url,
+       "fetched_at_utc": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+       "manifest_sha256": hashlib.sha256(b).hexdigest(), "manifest_bytes": len(b),
+       "release": m.get("release"), "version": m.get("version"),
+       "files": {f["path"]: f["sha256"] for f in m.get("files", [])}}
+open(out, "w").write(json.dumps(rec, indent=1, sort_keys=True) + "\n")
+print("reader receipt written; bound digest", rec["manifest_sha256"][:16])
+PY
+sh "$SELF" --recheck "$WORK/local-receipt.json" "$U" || true
+echo "--- republish the same version a third time, with a different input"
+rm -rf "$mk/public/source/$NEW"
+printf '\n<!-- second change, same version -->\n' >> "$mk/public/index.html"
+(cd "$mk" && node tools/make-release.mjs "$NEW" >/dev/null 2>&1)
+set +e
+sh "$SELF" --recheck "$WORK/local-receipt.json" "$U"; rc=$?
+set -e
+echo "recheck exit=$rc (1 = the URL no longer serves what the reader bound)"
+echo "--- and the publisher's own stranger verifier on the same republished URL:"
+# verify-release.sh is not part of release $V's own file list; take it from a release that ships it.
+VER_REL="${VER_REL:-0.18.0}"
+curl -fsS "https://gpb-feed.vercel.app/source/$VER_REL/tools__verify-release.sh.txt" -o "$WORK/verify-release.sh"
+echo "(their tools/verify-release.sh from release $VER_REL)"
+sh "$WORK/verify-release.sh" "$U" 2>&1 | tail -2
+kill "$(cat "$WORK/srv.pid")" 2>/dev/null || true
+echo "workdir kept: $WORK"

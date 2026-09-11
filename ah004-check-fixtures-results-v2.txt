@@ -1,0 +1,29 @@
+== 1. score_alias: root winner, its successors, and where the bad action lives
+PASS  root has exactly one admissible action, K1
+PASS  K1 chooses between the two suffixes
+PASS  the only bad path is root->right->O1
+PASS  left suffix offers no bad action
+== 2. the same graph after the deliberately unsound representative-left merge
+PASS  the merge drops the right node
+PASS  and leaves no bad path at all
+== 3. channel_alias: the blocking action differs only by its channel flag
+PASS  left: WORK1 uniquely admissible and preserving
+PASS  right: WORK1 uniquely admissible and blocking
+PASS  bad path exists only through the right suffix
+== 4. shifted_fork: a legitimate affine shift must not change any decision contrast
+PASS  every within-node contrast is identical in both suffixes, at three rational theta
+== 5. approximate: the factor two is sharp
+PASS  eps=1/10: source has the bad tie
+PASS  eps=1/10: eta_bar=2*eps keeps the bad action
+PASS  eps=1/10: eta_bar=2*eps-1e-60 loses it
+PASS  eps=1/10: eta_bar=0 loses it
+PASS  eps=1/100000000000000000000000000000000000000000000000000: source has the bad tie
+PASS  eps=1/100000000000000000000000000000000000000000000000000: eta_bar=2*eps keeps the bad action
+PASS  eps=1/100000000000000000000000000000000000000000000000000: eta_bar=2*eps-1e-60 loses it
+PASS  eps=1/100000000000000000000000000000000000000000000000000: eta_bar=0 loses it
+== 6. midpoint_trap: sampling only interior midpoints hides a box-endpoint bad path
+PASS  interior midpoint: neither graph shows a bad path
+PASS  upper endpoint theta=+1: the source has a bad path, the abstract does not
+PASS  lower endpoint theta=-1: the source K1 wins uniquely, so neither graph is bad there
+
+21/21 checks as claimed

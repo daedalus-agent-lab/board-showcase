@@ -1,0 +1,234 @@
+time="2026-09-10T11:38:32Z" level=warning msg="Docker Compose is configured to build using Bake, but buildx isn't installed"
+#0 building with "default" instance using docker driver
+
+#1 [check internal] load build definition from Dockerfile
+#1 transferring dockerfile: 538B done
+#1 DONE 0.0s
+
+#2 [check internal] load metadata for docker.io/library/node:22.22.0-bookworm-slim@sha256:dd9d21971ec4395903fa6143c2b9267d048ae01ca6d3ea96f16cb30df6187d94
+#2 DONE 0.6s
+
+#3 [check internal] load .dockerignore
+#3 transferring context: 131B done
+#3 DONE 0.0s
+
+#4 [check 1/9] FROM docker.io/library/node:22.22.0-bookworm-slim@sha256:dd9d21971ec4395903fa6143c2b9267d048ae01ca6d3ea96f16cb30df6187d94
+#4 resolve docker.io/library/node:22.22.0-bookworm-slim@sha256:dd9d21971ec4395903fa6143c2b9267d048ae01ca6d3ea96f16cb30df6187d94 0.0s done
+#4 DONE 0.0s
+
+#5 [check internal] load build context
+#5 transferring context: 108.09kB done
+#5 DONE 0.0s
+
+#6 [check 4/9] RUN timeout 240s npm ci --ignore-scripts --no-audit --no-fund --fetch-retries=1 --fetch-timeout=20000
+#6 CACHED
+
+#7 [check 2/9] WORKDIR /app
+#7 CACHED
+
+#8 [check 3/9] COPY package*.json ./
+#8 CACHED
+
+#9 [check 5/9] COPY contracts ./contracts
+#9 CACHED
+
+#10 [check 6/9] COPY scripts ./scripts
+#10 DONE 0.1s
+
+#11 [check 7/9] COPY tests ./tests
+#11 DONE 0.0s
+
+#12 [check 8/9] RUN npm run compile
+#12 0.287 
+#12 0.287 > tokn@3.4.0 compile
+#12 0.287 > node scripts/compile.mjs
+#12 0.287 
+#12 9.884 AgentEscrow compiled with 0.8.36+commit.8a079791.Emscripten.clang
+#12 9.884 BaseSepoliaWTOKN compiled with 0.8.36+commit.8a079791.Emscripten.clang
+#12 9.885 BridgeAttestation compiled with 0.8.36+commit.8a079791.Emscripten.clang
+#12 9.885 NativeTOKNTestLock compiled with 0.8.36+commit.8a079791.Emscripten.clang
+#12 9.886 BondedValidators compiled with 0.8.36+commit.8a079791.Emscripten.clang
+#12 9.887 CohortBondedValidators compiled with 0.8.36+commit.8a079791.Emscripten.clang
+#12 9.888 ReviewEscrow compiled with 0.8.36+commit.8a079791.Emscripten.clang
+#12 9.888 TestRecipient compiled with 0.8.36+commit.8a079791.Emscripten.clang
+#12 9.888 WorkVault compiled with 0.8.36+commit.8a079791.Emscripten.clang
+#12 11.39 CapsuleEscrow compiled with 0.8.36+commit.8a079791.Emscripten.clang
+#12 DONE 11.5s
+
+#13 [check 9/9] RUN groupadd --system --gid 10001 tokn && useradd --system --uid 10001 --gid 10001 --no-create-home tokn
+#13 0.199 useradd warning: tokn's uid 10001 is greater than SYS_UID_MAX 999
+#13 DONE 0.2s
+
+#14 [check] exporting to image
+#14 exporting layers
+#14 exporting layers 0.2s done
+#14 exporting manifest sha256:46464066233f36444932ee4065c79523fd4cae5705e1d5a7980ca19c566417ef
+#14 exporting manifest sha256:46464066233f36444932ee4065c79523fd4cae5705e1d5a7980ca19c566417ef 0.0s done
+#14 exporting config sha256:4349be566838743ced782102292958b76b487ad2b6d0e60aaf508a382adbb297 0.0s done
+#14 exporting attestation manifest sha256:ed37454e6fb4418b2d9cf126bec7e7a920da51881767998aa23f012c4dba07bb 0.0s done
+#14 exporting manifest list sha256:c183f66b071a9247cee230fe7f98cc8428f9ea2bedc96e3cc9c037f85d35317c 0.0s done
+#14 naming to docker.io/library/tokn-capsule-candidate:local done
+#14 unpacking to docker.io/library/tokn-capsule-candidate:local 0.1s done
+#14 DONE 0.4s
+
+#15 [check] resolving provenance for metadata file
+#15 DONE 0.0s
+TAP version 13
+# Subtest: agent-kek v2 SIGKILL matrix matches actual persistOnce barriers
+ok 1 - agent-kek v2 SIGKILL matrix matches actual persistOnce barriers
+  ---
+  duration_ms: 1594.701133
+  type: 'test'
+  ...
+# Subtest: recovery rejects a pending hard link whose sibling is outside the store
+ok 2 - recovery rejects a pending hard link whose sibling is outside the store
+  ---
+  duration_ms: 1.099331
+  type: 'test'
+  ...
+# Subtest: store recovery permits only a published same-directory staging sibling and an unlinked lock
+ok 3 - store recovery permits only a published same-directory staging sibling and an unlinked lock
+  ---
+  duration_ms: 1.83402
+  type: 'test'
+  ...
+# bigint: Failed to load bindings, pure JS will be used (try npm run rebuild?)
+# This version of µWS is not compatible with your Node.js build:
+# Error: Cannot find module '../binaries/uws_linux_arm64_127.node'
+# Require stack:
+# - /app/node_modules/ganache/node_modules/@trufflesuite/uws-js-unofficial/src/uws.js
+# - /app/node_modules/ganache/dist/node/core.js
+# Falling back to a NodeJS implementation; performance may be degraded.
+# Subtest: capsule checks never execute as root
+ok 4 - capsule checks never execute as root
+  ---
+  duration_ms: 1.311895
+  type: 'test'
+  ...
+# Subtest: capsule authenticated encryption, exact data-only envelope and immutable persistence
+ok 5 - capsule authenticated encryption, exact data-only envelope and immutable persistence
+  ---
+  duration_ms: 57.52774
+  type: 'test'
+  ...
+# Subtest: tool identity covers the complete fixed capsule runner surface
+ok 6 - tool identity covers the complete fixed capsule runner surface
+  ---
+  duration_ms: 0.716208
+  type: 'test'
+  ...
+# Subtest: journal recovery is explicit, quiescent and never removes unresolved signed transactions
+ok 7 - journal recovery is explicit, quiescent and never removes unresolved signed transactions
+  ---
+  duration_ms: 9.460462
+  type: 'test'
+  ...
+# Subtest: dynamic transaction fees support EIP-1559 and reject unbounded network quotes
+ok 8 - dynamic transaction fees support EIP-1559 and reject unbounded network quotes
+  ---
+  duration_ms: 1.558017
+  type: 'test'
+  ...
+# Subtest: explicit same-intent fee replacement preserves nonce and settles once
+ok 9 - explicit same-intent fee replacement preserves nonce and settles once
+  ---
+  duration_ms: 967.889343
+  type: 'test'
+  ...
+# Subtest: constructor refuses production and frozen-pilot chain IDs in isolated simulations
+ok 10 - constructor refuses production and frozen-pilot chain IDs in isolated simulations
+  ---
+  duration_ms: 236.79515
+  type: 'test'
+  ...
+# Subtest: capsule 4.0 vertical: bounded authority, durable real HTTP, inert recovery and exact native settlement
+    # Subtest: EIP-712 domain and genesis differential vectors agree with Solidity
+    ok 1 - EIP-712 domain and genesis differential vectors agree with Solidity
+      ---
+      duration_ms: 601.286275
+      type: 'test'
+      ...
+    # Subtest: invalid policies, wrong fields and conflicts cannot reserve money
+    ok 2 - invalid policies, wrong fields and conflicts cannot reserve money
+      ---
+      duration_ms: 913.892122
+      type: 'test'
+      ...
+    # Subtest: real concurrent relayers cannot both reserve the last budget unit
+    ok 3 - real concurrent relayers cannot both reserve the last budget unit
+      ---
+      duration_ms: 810.204564
+      type: 'test'
+      ...
+    # Subtest: STORE, close/reopen, RETRIEVE/decrypt, signed receipt, lost-response retry and native withdrawal
+    ok 4 - STORE, close/reopen, RETRIEVE/decrypt, signed receipt, lost-response retry and native withdrawal
+      ---
+      duration_ms: 3783.054739
+      type: 'test'
+      ...
+    # Subtest: PUT acknowledgement requires exact bounded HTTP readback before upload succeeds
+    ok 5 - PUT acknowledgement requires exact bounded HTTP readback before upload succeeds
+      ---
+      duration_ms: 16517.586032
+      type: 'test'
+      ...
+    # Subtest: forged issuer, altered receipt and future timestamp do not pay
+    ok 6 - forged issuer, altered receipt and future timestamp do not pay
+      ---
+      duration_ms: 1079.895389
+      type: 'test'
+      ...
+    # Subtest: HTTP admission, byte corruption, quotas and tampered disk fail closed
+    ok 7 - HTTP admission, byte corruption, quotas and tampered disk fail closed
+      ---
+      duration_ms: 2858.636064
+      type: 'test'
+      ...
+    # Subtest: a compromised authorized reader can lie, but cannot exceed the explicit lifetime budget
+    ok 8 - a compromised authorized reader can lie, but cannot exceed the explicit lifetime budget
+      ---
+      duration_ms: 1091.514034
+      type: 'test'
+      ...
+    # Subtest: revocation fences new work, preserves accepted liabilities and refunds never refill budget
+    ok 9 - revocation fences new work, preserves accepted liabilities and refunds never refill budget
+      ---
+      duration_ms: 1515.588601
+      type: 'test'
+      ...
+    # Subtest: unavailable reader/provider reaches permissionless refund, not silent provider payment
+    ok 10 - unavailable reader/provider reaches permissionless refund, not silent provider payment
+      ---
+      duration_ms: 992.166804
+      type: 'test'
+      ...
+    # Subtest: failed withdrawals conserve credit; recipient reentrancy cannot withdraw twice; fees are separate
+    ok 11 - failed withdrawals conserve credit; recipient reentrancy cannot withdraw twice; fees are separate
+      ---
+      duration_ms: 2132.18816
+      type: 'test'
+      ...
+# (node:63) MaxListenersExceededWarning: Possible EventEmitter memory leak detected. 11 close listeners added to [Server]. MaxListeners is 10. Use emitter.setMaxListeners() to increase limit
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Evidence: /evidence/work/evidence-S4vcKo/result.json
+    # Subtest: actual CLI end-to-end plus SIGKILL and explicitly quiescent storage recovery
+    ok 12 - actual CLI end-to-end plus SIGKILL and explicitly quiescent storage recovery
+      ---
+      duration_ms: 9457.436044
+      type: 'test'
+      ...
+    1..12
+ok 11 - capsule 4.0 vertical: bounded authority, durable real HTTP, inert recovery and exact native settlement
+  ---
+  duration_ms: 42039.777871
+  type: 'test'
+  ...
+1..11
+# tests 23
+# suites 0
+# pass 23
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 45774.274406

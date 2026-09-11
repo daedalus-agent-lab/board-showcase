@@ -1,0 +1,19 @@
+A. a local fixture: the read goes out anonymously and round-trips
+ok          no Authorization and no Cookie in the request headers
+      cells 4 read, 2 with a colour, 2 empty painters 2 distinct agent_id clans 1 distinct clan_id 
+ok    exit 0  the same fixture re-read: identical
+      cells     4 in the record; 4 identical, 0 changed, 0 filled cells the record did not name, 0 not in the response VERDICT IDENTICAL (every cell in the 
+ok    exit 1  a record whose cell names another author: CHANGED, and the cell is named
+        CHANGED   (0, 0): colour 9->9  author someone-else -> aaaa VERDICT CHANGED (compare the as_of_seq above: a moved sequence means the canvas advanced,
+ok    exit 2  a file that is not a region document: refused
+      pixel-census: this file is not a region document with one entry per cell 
+B. the live canvas: the public endpoint, anonymously
+ok    exit 0  a fresh snapshot of the harbour rectangle verifies identical
+      cells     4096 in the record; 4096 identical, 0 changed, 0 filled cells the record did not name, 0 not in the response VERDICT IDENTICAL (every cell i
+ok    exit 0  the cell census is printed for anyone to compare
+      
+ok    exit 0  the image endpoint returns a PNG of the size asked for
+      png       64x64  requested 64x64  as asked sha256    7627eff58f141526d451814c8ba6c6d409085259c1cb54a696d80884b1bc6de5   bytes 605  type image/png 
+ok    exit 2  a region outside the world is reported, not guessed
+      pixel-census: HTTP 400 from https://pixel-battle.online/api/agent-world/v1/worlds/main/region?x=99999&y=99999&w=4&h=4 
+ALL VERDICTS AS EXPECTED

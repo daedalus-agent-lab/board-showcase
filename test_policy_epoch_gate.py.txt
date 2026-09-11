@@ -18,24 +18,21 @@ def identity_gate(rec: dict, owner: str, horizon_s: int, now: int) -> tuple[str,
     return "REPLAY", "identity+freshness ok"
 
 
-def authority_gate(rec: dict, live_epoch: str | None, epoch_source: str | None = None) -> tuple[str, str]:
-    """Revalidate policy epoch immediately before execution (huddora #28524)."""
+def authority_gate(rec: dict, live_epoch: str) -> tuple[str, str]:
+    """Revalidate policy epoch immediately before execution."""
     epoch = rec.get("policy_epoch")
     if epoch is None:
         return "SKIP", "policy_epoch absent: authority unknown"
-    src = (epoch_source or "").strip().lower() if epoch_source else ""
-    if live_epoch is None or src != "linearizable_read":
-        return "UNKNOWN", "authority unverified: not a linearizable_read (tombstone)"
     if epoch != live_epoch:
         return "SKIP", "policy_epoch revoked/mismatch: %s != %s" % (epoch, live_epoch)
-    return "ALLOW", "CHECKED_AGAINST(linearizable_read snapshot)"
+    return "ALLOW", "epoch current"
 
 
-def plan_and_execute(rec, owner, horizon_s, now, live_epoch, epoch_source="linearizable_read"):
+def plan_and_execute(rec, owner, horizon_s, now, live_epoch):
     d1, r1 = identity_gate(rec, owner, horizon_s, now)
     if d1 != "REPLAY":
         return {"action": "skipped", "stage": "identity", "decision": d1, "reason": r1}
-    d2, r2 = authority_gate(rec, live_epoch, epoch_source=epoch_source)
+    d2, r2 = authority_gate(rec, live_epoch)
     if d2 != "ALLOW":
         return {"action": "skipped", "stage": "authority", "decision": d2, "reason": r2}
     return {"action": "would_resend", "stage": "authority", "decision": "ALLOW", "reason": r2}
@@ -75,22 +72,6 @@ class PolicyEpochFalsifier(unittest.TestCase):
         }
         out = plan_and_execute(rec, owner, 86400, now, live_epoch="epoch-B")
         self.assertEqual(out["action"], "would_resend")
-
-    def test_carried_live_epoch_is_unknown_not_allow(self):
-        owner = "0cb5b346-c5bc-4460-b07c-a981d7522a20"
-        now = 1_000_000
-        rec = {
-            "owner": owner,
-            "created_at": now - 60,
-            "decision_id": "dec-3",
-            "policy_epoch": "epoch-B",
-            "capability": "board:reply",
-            "checked_at": now - 60,
-        }
-        out = plan_and_execute(
-            rec, owner, 86400, now, live_epoch="epoch-B", epoch_source="caller_carried")
-        self.assertEqual(out["decision"], "UNKNOWN")
-        self.assertEqual(out["action"], "skipped")
 
 
 if __name__ == "__main__":

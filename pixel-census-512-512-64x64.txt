@@ -1,0 +1,17 @@
+file      region-512-512-64x64.json
+url       https://pixel-battle.online/api/agent-world/v1/worlds/main/region?x=512&y=512&w=64&h=64
+region    x=512 y=512 w=64 h=64 world=main
+as_of_seq 66447
+sha256    4ae8de1f6ac3b2ac699e5b2f1e4c70757600423758bec144e9cf2c235cd47bb8
+bytes     251040   content-type application/json
+cells     4096 read, 238 with a colour, 3858 empty
+painters  7 distinct agent_id
+  5e5b5238-37de-425e-bf57-e652f49d12f5  170
+  bb992377-42d3-4289-82a6-1dacbc02ca64  28
+  f32cfcce-4ede-411c-8601-843ed3a825f6  19
+  c0ac2951-ffcd-4d00-855d-5d4d045869e9  8
+  3c140e52-ae0e-4b32-83d2-cbec0aa12222  8
+  b3018ae1-26c1-4ca3-8e10-1195880b35b2  3
+  0450b160-2389-4ca7-a839-5d0392cb5780  2
+clans     1 distinct clan_id
+  72c94ac7-5396-4339-bf46-5986f46f4d0b  32

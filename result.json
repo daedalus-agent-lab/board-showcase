@@ -1,0 +1,81 @@
+{
+  "schema": "tokn-capsule-qa/1",
+  "scope": "ISOLATED_SAME_CONTROLLER_GANACHE_AND_REAL_HTTP",
+  "chainId": 2026090605,
+  "genesisHash": "0xfb25e35eceb486b2efe2e2c6f41b3642758d64ee03e0fa0cfd07cd4e789320aa",
+  "escrow": "0x165d1a2457aa2b73Ab3407eC29439E50860E7161",
+  "runtimeHash": "0x4357b9c7eaa3af0d62e4bf22b815a7aa94fec374abcd14b007b8178047285d91",
+  "transactions": [
+    {
+      "action": "mandate",
+      "hash": "0x9a8880697f13d33c46fc7bc1d962955e44478fe83b842ed7a1a84cd90e9cf135"
+    },
+    {
+      "action": "reserve",
+      "hash": "0x14ce16d9417197f85892a6575461110df4dbb446cc764e5a07c60ddd0125c7a8"
+    },
+    {
+      "action": "accept",
+      "hash": "0x1e21d65d86488484b2a94e4c74fefb587410da0eb51115a06891d70f5fc5177b"
+    },
+    {
+      "action": "complete",
+      "hash": "0x3299119c1997552751e37d090b9e5a3bfc663c3f0e7dea196439ac1183261933"
+    },
+    {
+      "action": "withdraw",
+      "hash": "0x6a5ff0480e19454b6c3ce68e0eacc58e7a01d7d5ab7e0c445f894452483f117b"
+    }
+  ],
+  "checks": [
+    "encrypted real HTTP store/reopen/retrieve",
+    "100 duplicate completion rejections",
+    "lost broadcast response exact-raw retry",
+    "native provider withdrawal",
+    "actual HTTP 201 missing/corrupt/truncated/oversized/wrong-type/redirect/timeout readback rejected",
+    "HTTP 201 and repeat 200 exact readback accepted without settlement",
+    "real HTTP corrupt/missing/content-type/quota rejection",
+    "concurrent last storage slot",
+    "corrupt persistent object startup rejection",
+    "authorized-reader lie accepted within budget: explicit negative trust boundary",
+    "concurrent budget conservation",
+    "revocation preserving accepted liabilities",
+    "forged actor/cross-domain/subject rejection",
+    "timeout refund without quality verdict",
+    "failed withdrawal retains credit",
+    "recipient reentry rejected without blocking first payment",
+    "fees isolated from principal and credit",
+    "actual CLI dry-run leaves chain unchanged",
+    "actual CLI gasless-reader funded/reserve/accept/store/receive/complete",
+    "SIGKILL after PUT acknowledgement and explicit quiescent restart exact bytes"
+  ],
+  "independentOperators": 0,
+  "productionChanged": false,
+  "jobId": "0x4e36dd6653f4ed330ea3eafcb1c0132bd0287ebc66a919ddef1177ba0f7e26e8",
+  "cipherDigest": "0xb49213b51086cf7404963fa5caa3b62b408197e2c4702008e14c0aa5224b2217",
+  "cipherSize": 124,
+  "readerBalance": "0",
+  "verifiedReceipt": {
+    "schema": "tokn-capsule-reader-receipt/1",
+    "receipt": {
+      "jobId": "0x4e36dd6653f4ed330ea3eafcb1c0132bd0287ebc66a919ddef1177ba0f7e26e8",
+      "termsHash": "0x8b6aa5de34aa2ebf3d685665bfecc18cae742dfd8f29fe293106529e9a4a1771",
+      "cipherDigest": "0xb49213b51086cf7404963fa5caa3b62b408197e2c4702008e14c0aa5224b2217",
+      "envelopeDigest": "0x731af62a7e9eac76a949755ccb5ed19db64c6a44cce983cc2c290f36bee3210b",
+      "toolDigest": "0x898388de1c3711f2386a62e797931184cd26a994738ddeeea85cc3d45d578ae0",
+      "outcome": "0x4a19073961bc6eaf1b22a8972387aa4df155799c73a597d732523b3b16736620",
+      "cipherSize": 124,
+      "observedAt": 1789040333
+    },
+    "signature": "0x2ef36c458ef0e9288d31add9bf0e245dee83b7d60e56c02dbaf73297667671387f26e0cd655e71db03e9f3bae794c9d4a8fdf877e23710e34fd409a6059a9c491c",
+    "evidence": {
+      "chainId": 2026090605,
+      "genesisHash": "0xfb25e35eceb486b2efe2e2c6f41b3642758d64ee03e0fa0cfd07cd4e789320aa",
+      "escrow": "0x165d1a2457aa2b73Ab3407eC29439E50860E7161",
+      "blockNumber": 9,
+      "blockHash": "0x0beb8b1d92d321a852149c444627a5c6d8c659a682e9b6c909a8dd4236627ca9"
+    },
+    "interpretation": "AUTHORIZED_READER_SELF_REPORT; not independent execution or future retention proof"
+  },
+  "cliJobId": "0x837e772f87a5d8239e3c1f97a8f3722cfa495cecef14d40f3c974a38c62aba44"
+}

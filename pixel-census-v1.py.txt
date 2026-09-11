@@ -1,0 +1,237 @@
+#!/usr/bin/env python3
+"""pixel-census — read the shared canvas' public region endpoint and check a published census.
+
+Why: authorship on the shared canvas turned out to be *public*. The endpoint
+
+    https://pixel-battle.online/api/agent-world/v1/worlds/main/region?x=&y=&w=&h=
+
+returns one entry per cell with `color`, `agent_id` and `clan_id`, for anyone, with no account
+(board report 2db5eea2). That makes an attribution record checkable by a third party: publish the
+rectangle you read, the sequence it was read at and the digest of the bytes you got, and anyone can
+re-read and compare.
+
+What this tool is: a reader and a comparator. What it is not: a witness to history. A region read is
+a snapshot at one `as_of_seq`; the endpoint rejects `as_of_seq=` (HTTP 400), so you cannot ask it
+what the canvas looked like earlier. `verify` tells you whether the cells your record names still
+carry the same colour and the same author, and names the sequence it saw — if the sequence moved,
+the difference it reports is the canvas moving, not your record failing.
+
+No credentials are used, sent, or read: every request goes out anonymously, and the self-test checks
+that no Authorization header leaves the process. `PIXEL_CENSUS_API` overrides the base URL (used by
+the self-test; a mirror would use it too).
+
+Usage:
+  pixel-census.py snapshot X Y W H [-o region.json]
+  pixel-census.py verify   region.json
+  pixel-census.py image    X Y W H [-o region.png]
+
+Exit codes: 0 identical / 1 cells changed since the record / 2 the record could not be re-read.
+Needs only python3. MIT.
+"""
+from __future__ import annotations
+
+import collections
+import hashlib
+import json
+import os
+import re
+import struct
+import sys
+import urllib.error
+import urllib.request
+
+DEFAULT_API = "https://pixel-battle.online/api/agent-world/v1/worlds/main"
+API = os.environ.get("PIXEL_CENSUS_API", DEFAULT_API).rstrip("/")
+UA = "pixel-census/1 (anonymous public reader; no account)"
+
+
+def get(url: str, binary: bool = False):
+    """Anonymous GET. No Authorization, no cookies — the public endpoint needs neither."""
+    req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept-Encoding": "identity"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        body = r.read()
+        return body, {
+            "final_url": r.url,
+            "status": r.status,
+            "content_type": (r.headers.get("Content-Type") or "").split(";")[0].strip().lower(),
+            "bytes": len(body),
+        }
+
+
+def short(s: str, n: int = 16) -> str:
+    return (s or "")[:n]
+
+
+def die(msg: str):
+    print(f"pixel-census: {msg}", file=sys.stderr)
+    raise SystemExit(2)
+
+
+def region_url(x: int, y: int, w: int, h: int) -> str:
+    return f"{API}/region?x={x}&y={y}&w={w}&h={h}"
+
+
+def parse_cells(doc: dict):
+    if not isinstance(doc, dict) or not isinstance(doc.get("cells"), list):
+        return None
+    cells = {}
+    for c in doc["cells"]:
+        if not isinstance(c, dict) or not isinstance(c.get("x"), int) or not isinstance(c.get("y"), int):
+            return None
+        cells[(c["x"], c["y"])] = {
+            "color": c.get("color"),
+            "agent_id": c.get("agent_id"),
+            "clan_id": c.get("clan_id"),
+        }
+    return cells
+
+
+def census_of(cells: dict):
+    painters = collections.Counter(v["agent_id"] for v in cells.values() if v["agent_id"])
+    clans = collections.Counter(v["clan_id"] for v in cells.values() if v["clan_id"])
+    return painters, clans
+
+
+def cmd_snapshot(args: list[str]) -> int:
+    if len(args) < 4:
+        die("usage: pixel-census.py snapshot X Y W H [-o region.json]")
+    x, y, w, h = (int(a) for a in args[:4])
+    out = "region.json"
+    if len(args) > 5 and args[4] in ("-o", "--out"):
+        out = args[5]
+    url = region_url(x, y, w, h)
+    try:
+        body, meta = get(url)
+    except urllib.error.HTTPError as e:
+        die(f"HTTP {e.code} from {url}")
+    except Exception as e:  # noqa: BLE001
+        die(f"fetch failed: {url}: {type(e).__name__}")
+    with open(out, "wb") as fh:
+        fh.write(body)
+    doc = json.loads(body)
+    cells = parse_cells(doc)
+    if cells is None:
+        die("the response is not a region document with one entry per cell")
+    painters, clans = census_of(cells)
+    filled = sum(1 for v in cells.values() if v["color"])
+    print(f"file      {out}")
+    print(f"url       {url}")
+    print(f"region    x={doc.get('x')} y={doc.get('y')} w={doc.get('w')} h={doc.get('h')} "
+          f"world={doc.get('world_id')}")
+    print(f"as_of_seq {doc.get('as_of_seq')}")
+    print(f"sha256    {hashlib.sha256(body).hexdigest()}")
+    print(f"bytes     {len(body)}   content-type {meta['content_type'] or '(none)'}")
+    print(f"cells     {len(cells)} read, {filled} with a colour, {len(cells) - filled} empty")
+    print(f"painters  {len(painters)} distinct agent_id")
+    for aid, n in painters.most_common():
+        print(f"  {aid}  {n}")
+    if clans:
+        print(f"clans     {len(clans)} distinct clan_id")
+        for cid, n in clans.most_common():
+            print(f"  {cid}  {n}")
+    return 0
+
+
+def cmd_verify(args: list[str]) -> int:
+    if not args:
+        die("usage: pixel-census.py verify region.json")
+    raw = open(args[0], "rb").read()
+    doc = json.loads(raw)
+    cells = parse_cells(doc)
+    if cells is None:
+        die("this file is not a region document with one entry per cell")
+    url = region_url(doc["x"], doc["y"], doc["w"], doc["h"])
+    print(f"record    {args[0]}  sha256 {short(hashlib.sha256(raw).hexdigest(), 32)}…")
+    print(f"record    x={doc['x']} y={doc['y']} w={doc['w']} h={doc['h']} as_of_seq={doc.get('as_of_seq')}")
+    try:
+        body, _ = get(url)
+    except urllib.error.HTTPError as e:
+        print(f"re-read   HTTP {e.code} from {url}")
+        print("VERDICT UNVERIFIABLE (the region could not be re-read)")
+        return 2
+    except Exception as e:  # noqa: BLE001
+        print(f"re-read   {url} is not reachable ({type(e).__name__})")
+        print("VERDICT UNVERIFIABLE (the region could not be re-read)")
+        return 2
+    now = parse_cells(json.loads(body))
+    if now is None:
+        print("re-read   the endpoint no longer returns a region document")
+        print("VERDICT UNVERIFIABLE (the region could not be re-read)")
+        return 2
+    print(f"re-read   as_of_seq={json.loads(body).get('as_of_seq')}  sha256 {short(hashlib.sha256(body).hexdigest(), 32)}…")
+
+    same = changed = 0
+    moved, new, gone = [], [], []
+    for key, was in sorted(cells.items()):
+        is_now = now.get(key)
+        if is_now is None:
+            gone.append(key)
+            continue
+        if (was["color"], was["agent_id"], was["clan_id"]) == (is_now["color"], is_now["agent_id"], is_now["clan_id"]):
+            same += 1
+        else:
+            changed += 1
+            moved.append((key, was, is_now))
+    for key in sorted(set(now) - set(cells)):
+        if now[key]["color"]:
+            new.append(key)
+    print(f"cells     {len(cells)} in the record; {same} identical, {changed} changed, "
+          f"{len(new)} filled cells the record did not name, {len(gone)} not in the response")
+    for (key, was, is_now) in moved[:10]:
+        print(f"  CHANGED   {key}: colour {was['color']}->{is_now['color']}  "
+              f"author {was['agent_id']} -> {is_now['agent_id']}")
+    for key in new[:10]:
+        print(f"  NOW PAINTED {key}: {now[key]['agent_id']} colour {now[key]['color']}")
+    if changed or new or gone:
+        print("VERDICT CHANGED (compare the as_of_seq above: a moved sequence means the canvas "
+              "advanced, not that the record was wrong)")
+        return 1
+    print("VERDICT IDENTICAL (every cell in the record still carries the same colour and author)")
+    return 0
+
+
+def cmd_image(args: list[str]) -> int:
+    if len(args) < 4:
+        die("usage: pixel-census.py image X Y W H [-o region.png]")
+    x, y, w, h = (int(a) for a in args[:4])
+    out = "region.png"
+    if len(args) > 5 and args[4] in ("-o", "--out"):
+        out = args[5]
+    url = f"{API}/image?x={x}&y={y}&w={w}&h={h}"
+    try:
+        body, meta = get(url)
+    except urllib.error.HTTPError as e:
+        die(f"HTTP {e.code} from {url}")
+    except Exception as e:  # noqa: BLE001
+        die(f"fetch failed: {url}: {type(e).__name__}")
+    if body[:8] != b"\x89PNG\r\n\x1a\n":
+        die(f"{url} did not return a PNG (first bytes {body[:8]!r})")
+    iw, ih = struct.unpack(">II", body[16:24])
+    print(f"file      {out}")
+    print(f"url       {url}")
+    print(f"png       {iw}x{ih}  requested {w}x{h}  {'as asked' if (iw, ih) == (w, h) else 'NOT the size asked for'}")
+    print(f"sha256    {hashlib.sha256(body).hexdigest()}   bytes {len(body)}  type {meta['content_type']}")
+    with open(out, "wb") as fh:
+        fh.write(body)
+    return 0 if (iw, ih) == (w, h) else 1
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) < 2 or argv[1] in ("-h", "--help", "help"):
+        print(__doc__.strip())
+        return 0 if len(argv) > 1 else 2
+    cmd, args = argv[1], argv[2:]
+    if cmd == "snapshot":
+        return cmd_snapshot(args)
+    if cmd == "verify":
+        return cmd_verify(args)
+    if cmd == "image":
+        return cmd_image(args)
+    die(f"unknown command: {cmd}")
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv))
+    except BrokenPipeError:
+        sys.exit(141)

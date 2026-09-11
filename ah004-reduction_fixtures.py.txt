@@ -1,0 +1,105 @@
+"""Fully disclosed synthetic support graphs. No live-agent instrumentation.
+
+In the fork, K1 at root selects a fair chance successor left/right. At the
+suffix, K leaves the correction channel open and O closes it BEFORE a request
+is sent. The bit permits/rejects a delivered request. Display text may be the
+same 'ready' in both suffixes; concrete history IDs remain distinct.
+"""
+from copy import deepcopy
+from fractions import Fraction as Q
+from random import Random
+
+
+def pair(base, keep, c, v, successors=()):
+    return [{'name':base+str(bit),'base':base,'bit':bit,'keep':keep,
+             'c':str(Q(c)+bit),'v':list(map(str,v)),'next':list(successors)}
+            for bit in (0,1)]
+
+
+def graph(nodes,box=(),eta=0,target='B',root='root'):
+    return {'root':root,'target':target,'eta':str(eta),
+            'box':[[str(l),str(u)] for l,u in box],'nodes':nodes}
+
+
+def leaf(name,k=0,o=-2,dim=0):
+    return {'name':name,'actions':pair('K',True,k,[0]*dim)+pair('O',False,o,[0]*dim)}
+
+
+def fork(left,right,box=()):
+    dim=len(box)
+    root={'name':'root','actions':pair('K',True,0,[0]*dim,('left','right'))+
+          pair('O',False,-3,[0]*dim)}
+    return graph([root,left,right],box)
+
+
+def score_alias():
+    # Unique root K1; right O1 wins, left K1 wins. Original B risk is 1/2
+    # for fair root chance. Representative-left merging falsely yields risk 0.
+    return fork(leaf('left'),leaf('right',o=1))
+
+
+def channel_alias():
+    left={'name':'left','actions':pair('K',True,-1,[])+pair('WORK',True,1,[])+pair('O',False,-3,[])}
+    right=deepcopy(left); right['name']='right'
+    for a in right['actions']:
+        if a['base']=='WORK': a['keep']=False
+    return fork(left,right)
+
+
+def shifted_fork():
+    left={'name':'left','actions':pair('K',True,Q(1,2),[0])+pair('O',False,0,[1])}
+    right=deepcopy(left);right['name']='right'
+    for a in right['actions']:
+        a['c']=str(Q(a['c'])+10**6)
+        a['v']=[str(Q(a['v'][0])+7)]
+    return fork(left,right,[(0,1)])
+
+
+def midpoint_trap():
+    left=leaf('root',k=0,o=-1,dim=1)
+    for a in left['actions']:
+        if a['base']=='O': a['v']=['1']
+    source=graph([left],[(-1,1)])
+    abstract=deepcopy(source)
+    for a in abstract['nodes'][0]['actions']: a['v']=['0']
+    return source,abstract
+
+
+def approximate(eps=Q(1,10)):
+    source=graph([leaf('root',k=0,o=0)])
+    abstract=deepcopy(source)
+    for a in abstract['nodes'][0]['actions']:
+        a['c']=str(Q(a['c'])+(eps if a['keep'] else -eps))
+    abstract['eta']=str(2*eps)
+    return source,abstract
+
+
+def representative_left(source):
+    """Deliberate UNSOUND compressor: merge right into left without checking."""
+    t=deepcopy(source);t['nodes']=[n for n in t['nodes'] if n['name']!='right']
+    for n in t['nodes']:
+        for a in n['actions']:
+            a['next']=sorted({'left' if h=='right' else h for h in a['next']})
+    mapping={n['name']:('left' if n['name']=='right' else n['name']) for n in source['nodes']}
+    return t,mapping
+
+
+def binary_tree(depth=5,seed=0,dim=1,target='B'):
+    """Repeated level template plus arbitrary common affine shifts per node."""
+    rng=Random(seed);nodes=[]
+    templates=[]
+    for level in range(depth+1):
+        templates.append([(Q(rng.randrange(-4,5),3),
+                           [Q(rng.randrange(-2,3),2) for _ in range(dim)]) for _ in range(2)])
+    def visit(name,level):
+        nxt=(name+'L',name+'R') if level<depth else ()
+        shift=Q(rng.randrange(-100,101),7)
+        vec=[Q(rng.randrange(-5,6),3) for _ in range(dim)]
+        acts=[]
+        for b,base in enumerate(('K','O')):
+            c,v=templates[level][b]
+            acts+=pair(base,b==0,c+shift,[x+y for x,y in zip(v,vec)],nxt if b==0 else ())
+        nodes.append({'name':name,'actions':acts})
+        for child in nxt: visit(child,level+1)
+    visit('root',0)
+    return graph(nodes,[(-1,1)]*dim,Q(seed%3,4),target)

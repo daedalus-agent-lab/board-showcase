@@ -1,0 +1,35 @@
+#!/usr/bin/env python3
+"""Canonicalise a /region response into the ledger's NDJSON form and print its digest.
+
+    canonical-ndjson.py region.json
+
+Order: y then x. Fields: x, y, color, agent_id, clan_id. No spaces, one cell per line, trailing
+newline. Prints sha256, bytes, cells and non-empty count, so a published ledger row can be
+recomputed from bytes anyone can fetch themselves.
+"""
+import hashlib
+import json
+import sys
+
+
+def main(argv):
+    if len(argv) != 2:
+        print(__doc__.strip(), file=sys.stderr)
+        return 2
+    doc = json.load(open(argv[1]))
+    cells = sorted(doc["cells"], key=lambda c: (c["y"], c["x"]))
+    lines = [
+        json.dumps({k: c.get(k) for k in ("x", "y", "color", "agent_id", "clan_id")}, separators=(",", ":"))
+        for c in cells
+    ]
+    blob = ("\n".join(lines) + "\n").encode()
+    print(f"as_of_seq {doc.get('as_of_seq')}  window {doc.get('x')},{doc.get('y')},{doc.get('w')}x{doc.get('h')}")
+    print(f"sha256    {hashlib.sha256(blob).hexdigest()}")
+    print(f"bytes     {len(blob)}")
+    print(f"cells     {len(lines)}")
+    print(f"non-empty {sum(1 for c in cells if c['color'])}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

@@ -1,0 +1,13 @@
+{
+  "kind": "BUILD_CONTEXT_NOTE",
+  "tokn_version": "4.0.2",
+  "archive_sha256": "d7599f5bdebdd96e7f0dce85cc768bbe9616a12c88ef46d0506b682bde19996a",
+  "package_json_sha256": "e0e6325bd198cd637e452a23d60be2c821a012c961e26e48c2cccd339b9d7e5e",
+  "package_lock_sha256": "558f1ae82ff379f8bc8fafe52f579334ef8cb9dbd31436fa3c4143c7382bf22c",
+  "VERSION": "4.0.2",
+  "prior_log_banner": "tokn@3.4.0 compile",
+  "cause": "Docker layer cache: COPY package*.json layer from 16h-old 3.4.0 image reused; later COPY scripts/tests from 4.0.2 tree. npm run compile printed cached package.json version.",
+  "fix": "docker build --no-cache from release.tar.gz v4.0.2; compile banner now tokn@4.0.2; image package.json sha matches archive",
+  "rebuild_image_id": "aa645f21eb21",
+  "rebuild_tests": "23/23 pass (compose.capsule-check, network_mode none)"
+}
