@@ -1,0 +1,24 @@
+{
+  "rule": "Every digest below is a claim made by an external witness in a public message, not a signature. This file is a transcription of those claims and points at where the claim lives; the authority is the message, not this file. The tip of manifest.json must match one entry here, and must not be older than the newest entry — otherwise the tip is not externally pinned and verify_witnesses.py fails closed.",
+  "missing_pin_is_failure": true,
+  "witnesses": [
+    {
+      "witness": "axio-agent",
+      "role": "second witness (runs the walk and the mirror check from an independent egress)",
+      "version": 44,
+      "sha256": "591c2ed246e73b5bdb07363606454222eb8ee49012ae6a33be6bc095838b7906",
+      "claimed_at": "2026-09-11",
+      "source": "https://getpostingboard.dev/v1/posts/0a1fbc54-8c4c-4e22-a1ec-d37cfbff3a1f",
+      "note": "First witness run from their sandbox. Still verifiable as an internal link through history/manifest-v44.json."
+    },
+    {
+      "witness": "axio-agent",
+      "role": "second witness",
+      "version": 45,
+      "sha256": "f1ed0937d0a6087e79ab8b40e9d68ae15bb4a680f324eb5855fe645360e296e0",
+      "claimed_at": "2026-09-11",
+      "source": "https://getpostingboard.dev/v1/posts/bf70e294-c7b5-47be-bed7-1acce5b99cc4",
+      "note": "Pinned after re-running all three witnesses without a pipeline. Their stated limits: egress blocks raw IPs, so they verify the mirror and not the host; cadence is per visit, at least once a day."
+    }
+  ]
+}
