@@ -140,36 +140,49 @@ def main() -> int:
         return 0
 
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    for d in duplicates:
+    # A tombstone is the record of *why* and *when* a digest was retired, and the log is the only
+    # thing that can answer "was this retired before, and why" after the bytes stop being served.
+    # Writing a second tombstone over the first would make that record last-writer-wins: the reason
+    # and date of the original eviction are lost, and `lift_tombstone` would then destroy the
+    # replacement alone. So an existing tombstone is never rewritten. Correcting a reason is two
+    # deliberate steps — lift, then evict again — which is the only way history is ever removed.
+    rewritten = []
+    pending = [dict(d, _kind="duplicate") for d in duplicates]
+    pending += [dict(a, _kind="row",
+                     filename=a.get("filename") or _filename_from_live(a.get("live")))
+                for a in evicted]
+    for d in pending:
+        p = store.tombstones / f"{d['sha256']}.json"
+        if p.is_file():
+            try:
+                old = json.loads(p.read_text())
+            except Exception:
+                old = {}
+            rewritten.append(d["sha256"])
+            print(f"already retired {d['sha256'][:12]} at {old.get('evicted_at', '?')} "
+                  f"(reason: {old.get('reason', '?')!r}); record unchanged. To retire these bytes "
+                  f"under a new reason, lift the tombstone first: lift_tombstone.py DATA_DIR "
+                  f"{d['sha256']} --reason '...'")
+            continue
         tomb = {
             "sha256": d["sha256"],
             "state": "evicted",
             "filename": d["filename"],
             "bytes": d["bytes"],
-            "author": "daedalus-protocore",
-            "evicted_at": now,
-            "evicted_by": "daedalus-protocore",
-            "reason": reason,
-            "note": ("superseded duplicate: a live row owns this filename; the blob file is "
-                     "retained on disk, the tombstone stops it being served and counted"
-                     + (f"; attribution basis {d['basis']}" if d["basis"] else "")),
-        }
-        _atomic_write(store.tombstones / f"{d['sha256']}.json",
-                      json.dumps(tomb, indent=2, sort_keys=True).encode())
-    for a in evicted:
-        tomb = {
-            "sha256": a["sha256"],
-            "state": "evicted",
-            "filename": a.get("filename") or _filename_from_live(a.get("live")),
-            "bytes": a.get("bytes"),
-            "author": a.get("author"),
-            "accepted_at": a.get("accepted_at"),
+            "author": d.get("author") or "daedalus-protocore",
             "evicted_at": now,
             "evicted_by": "daedalus-protocore",
             "reason": reason,
         }
-        _atomic_write(store.tombstones / f"{a['sha256']}.json",
-                      json.dumps(tomb, indent=2, sort_keys=True).encode())
+        if d.get("accepted_at"):
+            tomb["accepted_at"] = d["accepted_at"]
+        if d["_kind"] == "duplicate":
+            tomb["note"] = ("superseded duplicate: a live row owns this filename; the blob file is "
+                            "retained on disk, the tombstone stops it being served and counted"
+                            + (f"; attribution basis {d['basis']}" if d.get("basis") else ""))
+        _atomic_write(p, json.dumps(tomb, indent=2, sort_keys=True).encode())
+    if rewritten:
+        print(f"already retired, record unchanged: {len(rewritten)} digest(s)")
     man["artifacts"] = [a for a in arts if a.get("sha256") not in doomed]
     man["manifest_generation"] = int(man.get("manifest_generation") or 0) + 1
     _atomic_write(store.manifest_path, json.dumps(man, indent=2, sort_keys=True).encode())

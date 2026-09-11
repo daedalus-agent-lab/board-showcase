@@ -222,6 +222,65 @@ class DoorTests(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("no tombstone", r.stdout)
 
+    # --------------------------------------------- S2 / S3, the seams the fix itself created
+
+    def test_the_verdict_for_one_request_does_not_depend_on_an_intervening_write(self):
+        """S2: one key, two byte-identities.
+
+        Refusals do not consume an idempotency key, so the same key can be used again. The first
+        version of this answered the identical (bytes, key) pair DIGEST_TOMBSTONED in a quiet store
+        and IDEMPOTENCY_CONFLICT once an unrelated write had bound the key elsewhere. Both were
+        refusals — no retired address ever got a success answer — but a client branching on the
+        error code could not predict what it would get for a request it had already sent.
+        """
+        body_d = b"# retired before the retry key is used\n"
+        sha_d, _ = self.accept("d.md", body_d, "seed-key-0000000001")
+        self.evict(sha_d)
+
+        first = self.store.accept(content=body_d, check=make_check(body_d, "d.md", "fresh-key-000000001"),
+                                  principal="tester-agent", idempotency_key="fresh-key-000000001")
+        self.assertEqual(first["error"], "DIGEST_TOMBSTONED", first)
+
+        # Bind the same key to entirely different, live bytes.
+        body_b = b"# different bytes under the same key\n"
+        bound = self.store.accept(content=body_b, check=make_check(body_b, "b.md", "fresh-key-000000001"),
+                                  principal="tester-agent", idempotency_key="fresh-key-000000001")
+        self.assertEqual(bound["http"], 201, bound)
+
+        again = self.store.accept(content=body_d, check=make_check(body_d, "d.md", "fresh-key-000000001"),
+                                  principal="tester-agent", idempotency_key="fresh-key-000000001")
+        self.assertEqual(again["error"], first["error"],
+                         "the same request answered two different ways depending on what happened "
+                         "in between")
+        self.assertEqual(again["http"], 409, again)
+
+    def test_a_second_eviction_does_not_rewrite_the_first_record(self):
+        """S3: the tombstone is the record of why and when a digest was retired.
+
+        The tombstone file is keyed by digest, so a digest has exactly one by construction — the
+        set is a singleton, which is why a "partial lift" cannot desynchronise the two rules. What
+        could be lost is the record itself: writing a second tombstone over the first made the log
+        last-writer-wins, so the original reason and date vanished, and a later lift destroyed only
+        the replacement.
+        """
+        body = b"# evicted twice\n"
+        sha, _ = self.accept("twice.md", body, "twice-key-000000001")
+        first = self.run_tool(EVICT, str(self.data), sha, "--public-dir", str(self.public),
+                              "--reason", "first eviction: quota housekeeping")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        record = json.loads((self.data / "tombstones" / f"{sha}.json").read_text())
+        self.assertEqual(record["reason"], "first eviction: quota housekeeping")
+
+        second = self.run_tool(EVICT, str(self.data), sha, "--public-dir", str(self.public),
+                               "--reason", "second eviction: a later cleanup")
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertIn("already retired", second.stdout, second.stdout)
+        after = json.loads((self.data / "tombstones" / f"{sha}.json").read_text())
+        self.assertEqual(after["reason"], record["reason"], "the first reason was overwritten")
+        self.assertEqual(after["evicted_at"], record["evicted_at"], "the first date was overwritten")
+        # One digest, one record — the tool cannot leave two tombstones to be lifted separately.
+        self.assertEqual(len(list((self.data / "tombstones").glob(f"{sha}*"))), 1)
+
     # ---------------------------------------------------------- H5, the large lane's second door
 
     def test_large_lane_refuses_a_tombstoned_digest_at_init(self):
