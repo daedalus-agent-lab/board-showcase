@@ -429,6 +429,18 @@ def check(surface, rep: Report, *, limit: int | None = None, strict: bool = Fals
             "; ".join(f"{d[:12]} is live and named as displaced" for d in doubled[:5])
             or f"{len(live_digests)} live digest(s), none named as displaced")
 
+    # A1e: the attributed bucket is the one input to this accounting that no write path produces —
+    # `attributed.json` is written by a tool, and a record written by any other hand moves a blob
+    # out of the orphan count with nothing objecting. A refusal inside one writer is not a property
+    # of the file, so the evidence is re-checked at the reading end, where the count is consumed.
+    unsupported = getattr(surface, "attributed_unsupported", None)
+    if unsupported is not None:
+        bad = unsupported()
+        rep.add("A1e every attributed entry's evidence still holds when re-checked",
+                FAIL if bad else PASS,
+                "; ".join(bad[:5]) + (f" (+{len(bad) - 5} more)" if len(bad) > 5 else "")
+                or "each entry re-derived from receipts, catalog and tombstones")
+
     # A2: the mirror's own withdrawal index must carry every tombstone.
     index = surface.mirror_index()
     if index is None:
@@ -460,6 +472,35 @@ def check(surface, rep: Report, *, limit: int | None = None, strict: bool = Fals
             b, n = att_total()
             rep.add("A1c served with a reconstructed predecessor (attributed)", PASS,
                     f"{n} blob(s), {b} bytes (inferred from surviving receipts; not witnessed)")
+        # A1d offline: the sum is checked against the blobs on disk, not against itself. Over HTTP
+        # the endpoint computes served_totals as live+superseded+attributed+orphans and the check
+        # recomputes the same expression over the same payload, which no store state can falsify.
+        # Here the four buckets are compared with what the shelf actually holds — a blob counted
+        # twice, or by nothing, makes the numbers differ.
+        served_total = getattr(surface, "served_totals", None)
+        live_total = getattr(surface, "live_totals", None)
+        sup_total2 = getattr(surface, "superseded_totals", None)
+        if None not in (served_total, live_total, sup_total2, att_total, orphan_total):
+            sb, sn = served_total()
+            parts_n = live_total()[1] + sup_total2()[1] + att_total()[1] + orphan_total()[1]
+            parts_b = live_total()[0] + sup_total2()[0] + att_total()[0] + orphan_total()[0]
+            blobs_dir = Path(surface.data) / "blobs"
+            files = [p for p in blobs_dir.glob("*") if p.is_file()] if blobs_dir.is_dir() else []
+            # Tombstoned digests are retained on disk and served by nothing, so they are not part of
+            # what the buckets count; every other blob file must be in exactly one bucket.
+            tombed = {p.stem for p in (Path(surface.data) / "tombstones").glob("*.json")}
+            held = [p for p in files if p.name not in tombed]
+            held_n, held_b = len(held), sum(p.stat().st_size for p in held)
+            mism = []
+            if (parts_n, parts_b) != (sn, sb):
+                mism.append(f"buckets sum to {parts_n}/{parts_b}B, served_totals says {sn}/{sb}B")
+            if (held_n, held_b) != (sn, sb):
+                mism.append(f"the shelf holds {held_n} served blob(s)/{held_b}B, "
+                            f"the buckets account for {sn}/{sb}B — a blob is counted twice or by "
+                            f"nothing")
+            rep.add("A1d the buckets account for every served blob exactly once",
+                    FAIL if mism else PASS,
+                    "; ".join(mism) or f"{held_n} served blob(s), {held_b} bytes, each in one bucket")
     else:
         n = sn = an = None
         code, body = surface._get(f"{surface.api}/v1/shelf/agreement")
@@ -515,6 +556,16 @@ def check(surface, rep: Report, *, limit: int | None = None, strict: bool = Fals
                             f"live+superseded+attributed+orphans={expected}, "
                             f"served_totals={reported}")
             try:
+                bad_att = json.loads(body)["attributed_unsupported"]
+            except Exception:  # noqa: BLE001
+                rep.add("A1e every attributed entry's evidence still holds when re-checked", UNKNOWN,
+                        "the endpoint does not report it; the attributed count is taken on trust")
+            else:
+                rep.add("A1e every attributed entry's evidence still holds when re-checked",
+                        FAIL if bad_att else PASS,
+                        "; ".join(str(x) for x in bad_att[:5])
+                        or "each entry re-derived from receipts, catalog and tombstones")
+            try:
                 fence = json.loads(body)["fence"]
                 gen = json.loads(body).get("manifest_generation")
             except Exception:  # noqa: BLE001
@@ -547,7 +598,16 @@ def main() -> int:
             return rep.dump()
         from shelf_store import ShelfStore  # local import: only needed in offline mode
         store = ShelfStore(Path(a.data), Path(a.public) if a.public else None)
+        # All four buckets, not one. Attaching only orphan_totals made A1b, A1c and A1d disappear
+        # from the offline report without a word — an invariant that is silently absent reads as an
+        # invariant that held, and the sum A1d asserts is exactly the one an offline run of this
+        # check on the host was expected to cover.
         surface.orphan_totals = store.orphan_totals  # type: ignore[attr-defined]
+        surface.superseded_totals = store.superseded_totals  # type: ignore[attr-defined]
+        surface.attributed_totals = store.attributed_totals  # type: ignore[attr-defined]
+        surface.attributed_unsupported = store.attributed_unsupported  # type: ignore[attr-defined]
+        surface.served_totals = store.served_totals  # type: ignore[attr-defined]
+        surface.live_totals = store.live_totals  # type: ignore[attr-defined]
     elif a.api and a.mirror:
         surface = Live(a.api, a.mirror)
     else:

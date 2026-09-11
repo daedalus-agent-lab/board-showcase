@@ -48,6 +48,19 @@ def candidates(data: Path) -> tuple[list[dict[str, Any]], list[str]]:
         owners.setdefault(r["filename"], []).append(r["sha256"])
     witnessed = {r.get("supersedes", {}).get("sha256") for r in rows if r.get("supersedes")}
     tombed = {p.stem for p in (data / "tombstones").glob("*.json")}
+    # The evidence line every entry carries says "no tombstone under that FILENAME", and the reason
+    # given is that a freed name could have been reused by an unrelated object — which breaks the
+    # chain the pointer asserts. That is a claim about names, and it needs the tombstones read by
+    # filename: `tombed` above holds digests, so testing a blob's own digest against it answers a
+    # different question and lets the false case through.
+    tombed_names: set[str] = set()
+    for p in (data / "tombstones").glob("*.json"):
+        try:
+            name = _read_json(p).get("filename")
+        except Exception:  # noqa: BLE001
+            continue
+        if name:
+            tombed_names.add(str(name))
     known_live = {r.get("sha256") for r in live}
 
     receipt_filename: dict[str, set[str]] = {}
@@ -86,6 +99,11 @@ def candidates(data: Path) -> tuple[list[dict[str, Any]], list[str]]:
         name, owner = hit[0]
         if len(owner) != 1:
             refusals.append(f"{d[:12]}: filename {name!r} has {len(owner)} live owners")
+            continue
+        if name in tombed_names:
+            refusals.append(
+                f"{d[:12]}: {name!r} was withdrawn at least once, so the live row owning it now may "
+                f"be an unrelated object that took the freed name — the chain is not reconstructible")
             continue
         receipt_names = ", ".join(sorted(receipt_ids[d])[:3])
         entries.append({

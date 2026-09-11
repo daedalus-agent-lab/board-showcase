@@ -156,14 +156,95 @@ class ShelfStore:
         if not p.is_file():
             return {}
         try:
-            return dict(_read_json(p).get("entries") or {})
+            entries = dict(_read_json(p).get("entries") or {})
         except Exception:  # noqa: BLE001
             return {}
+        # This file is written by a tool, not by the write path, and any tool may write it. The one
+        # thing the store can refuse cheaply is an entry that claims to be something it is not: a
+        # reconstruction is `witnessed: false` by construction, so an entry saying otherwise is not
+        # a reconstruction and must not be read as one. Everything else this file asserts is checked
+        # against the evidence by attributed_unsupported().
+        return {d: e for d, e in entries.items()
+                if isinstance(e, dict) and e.get("witnessed") is not True}
+
+    def attributed_unsupported(self) -> list[str]:
+        """Attributed entries whose evidence does not hold when re-checked here, one line each.
+
+        `attributed.json` is an input to the accounting that no write path produces: the tool that
+        builds it refuses a candidate that fails an evidence check, but a refusal inside one writer
+        is not a property of the file, and a record written by hand moves a blob out of the orphan
+        count with nothing objecting. The same evidence is therefore re-checked at the reading end:
+        the bytes hash to the digest they are stored under, an acceptance receipt names the digest
+        with the declared filename, exactly one live row owns that filename and is the row the entry
+        points at, and the filename carries no tombstone (a freed name may have been reused by an
+        unrelated object, which breaks the chain the pointer asserts).
+        """
+        bad: list[str] = []
+        man = self.load_manifest()
+        rows = [a for a in man.get("artifacts") or [] if a.get("bytes") is not None]
+        owners: dict[str, list[str]] = {}
+        for r in rows:
+            if r.get("filename") and r.get("sha256"):
+                owners.setdefault(r["filename"], []).append(r["sha256"])
+        tombed_names = set()
+        for p in self.tombstones.glob("*.json"):
+            try:
+                name = _read_json(p).get("filename")
+            except Exception:  # noqa: BLE001
+                continue
+            if name:
+                tombed_names.add(str(name))
+        receipts: dict[str, set[str]] = {}
+        for p in self.ops.glob("*.json"):
+            try:
+                o = _read_json(p)
+            except Exception:  # noqa: BLE001
+                continue
+            if o.get("sha256") and o.get("filename"):
+                receipts.setdefault(o["sha256"], set()).add(str(o["filename"]))
+        for digest, e in sorted(self.attributed().items()):
+            name = e.get("filename")
+            blob = self.blobs / digest
+            if not blob.is_file():
+                bad.append(f"{digest[:12]}: attributed but no bytes are served under that digest")
+                continue
+            if sha256_hex(blob.read_bytes()) != digest:
+                bad.append(f"{digest[:12]}: served bytes do not hash to the digest they are filed under")
+                continue
+            if not name:
+                bad.append(f"{digest[:12]}: entry names no filename, so nothing can be re-checked")
+                continue
+            if name not in (receipts.get(digest) or set()):
+                bad.append(f"{digest[:12]}: no acceptance receipt names {name!r} for this digest")
+                continue
+            if name in tombed_names:
+                bad.append(f"{digest[:12]}: {name!r} carries a tombstone; the name may have been reused")
+                continue
+            owning = owners.get(name) or []
+            if len(owning) != 1:
+                bad.append(f"{digest[:12]}: {name!r} has {len(owning)} live owners, not one")
+                continue
+            if e.get("superseded_by") != owning[0]:
+                bad.append(f"{digest[:12]}: points at {str(e.get('superseded_by'))[:12]}, but "
+                           f"{name!r} is owned by {owning[0][:12]}")
+        return bad
 
     def attributed_totals(self) -> tuple[int, int]:
-        """(bytes, count) of served blobs whose displacement is reconstructed, not witnessed."""
+        """(bytes, count) of served blobs whose displacement is reconstructed, not witnessed.
+
+        A digest that is live, tombstoned or witnessed as superseded is NOT counted here, whatever
+        attributed.json says. The buckets have to partition the served blobs, and this file is the
+        one input to the accounting any tool may write: a record naming a digest that another bucket
+        already owns would be added to a total that is supposed to be a count of distinct blobs.
+        Precedence is the order the buckets are read in: live, superseded, attributed, orphan.
+        """
+        live = {a.get("sha256") for a in self.load_manifest().get("artifacts") or []
+                if a.get("bytes") is not None}
+        witnessed = set(self.superseded_digests())
         total_b = count = 0
         for digest in sorted(self.attributed()):
+            if digest in live or digest in witnessed or self.tombstone_of(digest):
+                continue
             p = self.blobs / digest
             if p.is_file():
                 total_b += p.stat().st_size
@@ -191,10 +272,19 @@ class ShelfStore:
         return total_b, count
 
     def superseded_totals(self) -> tuple[int, int]:
-        """(bytes, count) of blobs kept because a replacement names them."""
-        recounted = self.superseded_digests()
+        """(bytes, count) of blobs kept because a replacement names them.
+
+        A digest that is itself live is not counted: the same bytes can be republished under a second
+        filename while an older row still names them as what it replaced, and that blob is one file
+        on disk, counted once, as live. Without this the total exceeds what the shelf holds and the
+        quota derived from it bounds a number that no longer measures the disk.
+        """
+        live = {a.get("sha256") for a in self.load_manifest().get("artifacts") or []
+                if a.get("bytes") is not None}
         total_b = count = 0
-        for digest in sorted(recounted):
+        for digest in sorted(self.superseded_digests()):
+            if digest in live:
+                continue
             p = self.blobs / digest
             if p.is_file():
                 total_b += p.stat().st_size
@@ -832,9 +922,18 @@ class ShelfStore:
         # us, whatever the last published.json says. Without this, an eviction that wrote its
         # tombstone and then died before republishing leaves the copy served at 200 — the stale-read
         # half of the same defect, reachable by a crash rather than by a missing code path.
-        withdrawn_names = set()
-        for t in self.tombstone_index().get("by_name") or {}:
-            withdrawn_names.add(str(t))
+        #
+        # The warrant is for the withdrawn BYTES, not for the name. A name is not ours forever: once
+        # withdrawn it is free, and the file sitting under it now may be a hand-placed artifact that
+        # a post cites — exactly the case the sweep was narrowed for. Taking it on the strength of a
+        # tombstone would delete a file we never wrote, which is the rule this one would otherwise
+        # contradict. So the tombstone admits a name only while the file under it still hashes to
+        # the digest that was withdrawn: that file is our stale copy and nobody else's.
+        withdrawn_digests: dict[str, set[str]] = {}
+        for name, tombs in (self.tombstone_index().get("by_name") or {}).items():
+            for t in tombs:
+                if t.get("sha256"):
+                    withdrawn_digests.setdefault(str(name), set()).add(str(t["sha256"]))
         _atomic_write(self.public_dir / "manifest.json", self.manifest_path.read_bytes())
         _atomic_write(self.public_dir / "search.json", self.search_path.read_bytes())
         # The mirror's own withdrawal receipt: without it a 404 states only that the bytes are not
@@ -860,7 +959,9 @@ class ShelfStore:
         for p in sorted(self.public_dir.iterdir()):
             if not p.is_file() or p.name in wrote or p.name in keep:
                 continue
-            if p.name in prev or p.name in withdrawn_names or sweep_foreign:
+            stale_copy = (p.name in withdrawn_digests
+                          and sha256_hex(p.read_bytes()) in withdrawn_digests[p.name])
+            if p.name in prev or stale_copy or sweep_foreign:
                 removed.append(p.name)
                 p.unlink()
             else:

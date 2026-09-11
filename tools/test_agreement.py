@@ -329,6 +329,107 @@ class AgreementTests(unittest.TestCase):
         self.assertIn("mirror/withdrawn.md -> 404, not 410", out)
         self.assertIn("R5b", out)
 
+    # ---------------------------------------------------------------- the accounting, offline
+
+    def test_the_offline_report_names_all_four_buckets_not_only_orphans(self):
+        """An invariant that is silently absent reads as an invariant that held.
+
+        Offline, only `orphan_totals` was attached to the surface, so A1b, A1c and A1d never ran and
+        never said they had not run — including A1d, the one that asserts the buckets close. A check
+        with an unreported half is worth less than the report suggests, and the report is what an
+        operator reads.
+        """
+        self.accept("one.md", "# one\n", "key-four-00000001")
+        self.accept("one.md", "# two\n", "key-four-00000002")   # leaves a superseded blob
+        self.publish()
+
+        code, out = self.run_check()
+
+        self.assertEqual(code, 0, out)
+        for invariant in ("A1a", "A1b", "A1c", "A1d", "A1e"):
+            self.assertIn(invariant, out, f"{invariant} is missing from the offline report")
+
+    def test_a_blob_counted_twice_fails_the_sum(self):
+        """A1d must be falsifiable by the store's state, not a restatement of its own arithmetic.
+
+        Over HTTP the endpoint publishes four numbers and their sum, and the check re-adds the same
+        four: no shelf state can make that disagree. Offline the buckets are compared with the blobs
+        on disk, so a digest in two buckets — or in none — is a failure rather than a tautology.
+        """
+        old = self.accept("same.md", "# old\n", "key-sum-000000001")
+        self.accept("same.md", "# new\n", "key-sum-000000002")
+        self.publish()
+        code, out = self.run_check()
+        self.assertEqual(code, 0, out)
+
+        # Hand-write the superseded digest into the reconstruction file as well. Both buckets now
+        # claim one blob; the shelf still holds only what it holds.
+        (self.data / "attributed.json").write_text(json.dumps(
+            {"entries": {old: {"sha256": old, "superseded_by": old, "filename": "same.md",
+                               "witnessed": False}}}))
+
+        code, out = self.run_check("--strict")
+
+        self.assertEqual(code, 1, out)
+        self.assertIn("A1e", out)
+
+    def test_one_blob_claimed_by_two_live_rows_fails_the_sum(self):
+        """The case A1d exists for, and the one it could not see while it re-added its own numbers.
+
+        Two live rows naming the same digest under different filenames: the catalog counts two
+        objects, the shelf holds one file. Every other invariant is content with this — the bytes
+        hash correctly, both mirror copies serve them, nothing is withdrawn — so the disagreement is
+        visible only where the buckets are compared with the disk. A quota that bounds the disk with
+        this number bounds the wrong thing.
+        """
+        self.accept("a.md", "# one blob, two rows\n", "key-two-000000001")
+        man = json.loads((self.data / "manifest.json").read_text())
+        man["artifacts"].append({**man["artifacts"][0], "filename": "b.md"})
+        (self.data / "manifest.json").write_text(json.dumps(man))
+        self.publish()
+
+        code, out = self.run_check()
+
+        self.assertEqual(code, 1, out)
+        self.assertIn("A1d", out)
+        self.assertIn("counted twice or by nothing", out)
+
+    def test_an_unsupported_attribution_fails_rather_than_shrinking_the_orphan_count(self):
+        """A plausible record in a file any tool may write must not quietly explain a blob away."""
+        self.accept("live.md", "# live\n", "key-att-000000001")
+        bogus = "e" * 64
+        (self.data / "blobs" / bogus).write_bytes(b"unexplainable bytes\n")
+        self.publish()
+        owner = json.loads((self.data / "manifest.json").read_text())["artifacts"][0]["sha256"]
+        (self.data / "attributed.json").write_text(json.dumps(
+            {"entries": {bogus: {"sha256": bogus, "superseded_by": owner, "filename": "live.md",
+                                 "basis": "filename-and-acceptance-receipt", "witnessed": False}}}))
+
+        code, out = self.run_check()
+
+        self.assertEqual(code, 1, out)
+        self.assertIn("A1e", out)
+        self.assertIn(bogus[:12], out)
+
+    def test_a_replacement_naming_a_live_digest_fails_s4(self):
+        """S4 was asserted and never exercised: with it disabled every suite stayed green.
+
+        The state it forbids is reachable — the same bytes republished under a second name while an
+        older row still names the digest as what it replaced — and it is the state that makes a blob
+        countable in two buckets at once.
+        """
+        old = self.accept("a.md", "# A body\n", "key-s4-000000001")
+        self.accept("a.md", "# B body\n", "key-s4-000000002")
+        again = self.accept("a-again.md", "# A body\n", "key-s4-000000003")
+        self.assertEqual(again, old, "fixture: the same bytes must return under a new name")
+        self.publish()
+
+        code, out = self.run_check()
+
+        self.assertEqual(code, 1, out)
+        self.assertIn("S4", out)
+        self.assertIn("is live and named as displaced", out)
+
     def test_missing_data_directory_is_not_a_pass(self):
         cmd = [sys.executable, str(CHECK), "--data", str(Path(self.tmp.name) / "nope")]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)

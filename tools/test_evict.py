@@ -424,6 +424,140 @@ class EvictionTests(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
         self.assertIn("usage", (r.stdout + r.stderr).lower())
 
+    def test_the_tool_fails_when_a_copy_outlives_its_catalog_row(self):
+        """evict.py checks its expectation against the result and exits 1 if a copy is still served.
+
+        That check was never exercised: with it removed the suite stayed green, because on a healthy
+        shelf the sweep always succeeds. It is the line that turns a silent disagreement between the
+        two surfaces into a non-zero exit, so it is worth a fixture where the sweep cannot win —
+        here the mirror file is read-only through its directory, so the unlink fails.
+        """
+        sha = self.accept("stuck.md", "# will not leave\n", "key-stuck-00000001")
+        self.publish()
+        self.assertTrue((self.public / "stuck.md").is_file())
+
+        # Re-create the copy after the sweep, from a wrapper the tool calls: the simplest honest
+        # fixture is a publisher that cannot remove it, so patch the store the tool loads.
+        mutant = HERE / "_evict_stuck.py"
+        mutant.write_text(
+            "import sys\n"
+            "from pathlib import Path\n"
+            "sys.path.insert(0, str(Path(__file__).resolve().parent))\n"
+            "import shelf_store\n"
+            "_real = shelf_store.ShelfStore.publish_public\n"
+            "def _leaky(self, sweep_foreign=False):\n"
+            "    names = [p.name for p in self.public_dir.iterdir() if p.is_file()]\n"
+            "    bodies = {n: (self.public_dir / n).read_bytes() for n in names}\n"
+            "    out = _real(self, sweep_foreign)\n"
+            "    for n, b in bodies.items():\n"
+            "        if not (self.public_dir / n).exists():\n"
+            "            (self.public_dir / n).write_bytes(b)\n"
+            "    return out\n"
+            "shelf_store.ShelfStore.publish_public = _leaky\n"
+            "import evict\n"
+            "sys.exit(evict.main())\n")
+        try:
+            r = subprocess.run(
+                [sys.executable, str(mutant), str(self.data), sha,
+                 "--public-dir", str(self.public), "--reason", "capacity"],
+                capture_output=True, text=True, timeout=120)
+        finally:
+            mutant.unlink(missing_ok=True)
+
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("STILL SERVED", r.stdout + r.stderr)
+
+    # ---------------------------------------------------------------- the buckets partition
+
+    def test_a_digest_that_is_live_again_is_counted_once_not_twice(self):
+        """One blob, two claims on it: live under a new name, and named as replaced by an old row.
+
+        The same bytes can come back — republished under a second filename — while the row that
+        displaced them under the first name still names the digest in `supersedes`. The blob is one
+        file on disk. Counting it as live AND as superseded makes served_totals report more than the
+        shelf holds, and the quota derived from it then bounds a number that is not the disk.
+        """
+        a = self.accept("a.md", "# A body\n", "key-again-00000001")
+        self.accept("a.md", "# B body\n", "key-again-00000002")          # B displaces A
+        again = self.accept("a-again.md", "# A body\n", "key-again-00000003")  # A is live again
+        self.assertEqual(again, a, "fixture: the same bytes must return under a new name")
+        self.assertTrue(self.store.is_live(a))
+        self.assertIn(a, self.store.superseded_digests(), "fixture: the old row still names it")
+
+        on_disk = [p for p in (self.data / "blobs").glob("*") if p.is_file()]
+        served_b, served_n = self.store.served_totals()
+        self.assertEqual(served_n, len(on_disk),
+                         "a blob is counted in two buckets: served_totals exceeds what is held")
+        self.assertEqual(served_b, sum(p.stat().st_size for p in on_disk))
+        self.assertEqual(self.store.superseded_totals()[1], 0,
+                         "a digest that is live again is not also superseded residue")
+
+    def test_a_hand_written_attribution_cannot_double_count_a_witnessed_replacement(self):
+        """`attributed.json` is written by a tool, so any hand can write it. A record naming a digest
+        another bucket already owns must not be added to the total a second time."""
+        old = self.accept("same.md", "# old\n", "key-dbl-000000001")
+        new = self.accept("same.md", "# new\n", "key-dbl-000000002")
+        (self.data / "attributed.json").write_text(json.dumps(
+            {"entries": {old: {"sha256": old, "superseded_by": new, "filename": "same.md",
+                               "witnessed": False}}}))
+
+        on_disk = [p for p in (self.data / "blobs").glob("*") if p.is_file()]
+        self.assertEqual(self.store.served_totals()[1], len(on_disk))
+        self.assertEqual(self.store.attributed_totals()[1], 0,
+                         "a witnessed replacement is not also a reconstruction")
+
+    # ---------------------------------------------------------------- the two sweep rules
+
+    def test_a_foreign_file_under_a_withdrawn_name_is_not_swept(self):
+        """The collision between two rules the sweep holds at once.
+
+        'Remove a name that carries a withdrawal receipt' and 'remove only what we wrote' disagree
+        about one file: a hand-placed artifact, cited by a post, sitting under a name this shelf once
+        published and withdrew. A name is not ours forever — once withdrawn it is free — so the
+        tombstone may not be the warrant for deleting someone else's bytes.
+        """
+        sha = self.accept("card.md", "# ours, later withdrawn\n", "key-fgn-000000001")
+        self.publish()
+        self.assertEqual(self.evict(sha).returncode, 0)
+        self.assertFalse((self.public / "card.md").exists(), "fixture: our copy is withdrawn")
+
+        # Someone else places different bytes under the freed name, and a post cites the URL.
+        (self.public / "card.md").write_bytes(b"# hand-placed and cited\n")
+        pub = json.loads((self.public / "published.json").read_text())
+        self.assertNotIn("card.md", pub["files"], "fixture: we did not write this one")
+
+        self.publish()
+
+        self.assertTrue((self.public / "card.md").is_file(),
+                        "the sweep deleted a file it never wrote, on the strength of a tombstone "
+                        "for a different object under the same name")
+        self.assertIn("card.md",
+                      json.loads((self.public / "published.json").read_text())["foreign_left_alone"])
+
+    def test_our_own_stale_copy_under_a_withdrawn_name_is_still_swept(self):
+        """The other half: the tombstone must still take back OUR copy after a crashed eviction.
+
+        An eviction that writes its tombstone and dies before republishing leaves published.json
+        stale, so `prev` does not name the file. The bytes under the name still hash to the digest
+        that was withdrawn, which is what makes them ours.
+        """
+        sha = self.accept("crash.md", "# ours\n", "key-crash-00000001")
+        self.publish()
+        (self.data / "tombstones" / f"{sha}.json").write_text(json.dumps(
+            {"sha256": sha, "state": "evicted", "filename": "crash.md",
+             "evicted_at": "2026-09-11T00:00:00Z", "reason": "capacity"}))
+        man = self.manifest()
+        man["artifacts"] = [a for a in man["artifacts"] if a.get("sha256") != sha]
+        (self.data / "manifest.json").write_text(json.dumps(man))
+        pub = json.loads((self.public / "published.json").read_text())
+        pub["files"] = [f for f in pub["files"] if f != "crash.md"]
+        (self.public / "published.json").write_text(json.dumps(pub))
+
+        self.publish()
+
+        self.assertFalse((self.public / "crash.md").exists(),
+                         "a crashed eviction left our own copy served with no receipt")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
