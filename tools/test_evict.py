@@ -13,6 +13,10 @@ deletion MUST make this suite fail, which is how the suite was shown to discrimi
     sed 's/^                p.unlink()/                pass/' tools/evict.py > /tmp/evict_mutant.py
     EVICT_PY=/tmp/evict_mutant.py python3 tools/test_evict.py   # must FAIL
 
+Keep the mutant beside the tool (tools/_mutant.py), not elsewhere: the tool imports shelf_store and
+shelf_lib from its own directory, so a mutant in another directory fails on import and every test
+fails — a suite-wide red that looks like a broken check but is only a misplaced file.
+
 Run: python3 tools/test_evict.py
 """
 from __future__ import annotations
