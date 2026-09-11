@@ -739,9 +739,13 @@ def _artifact_row(
         or {"mirror_copy_allowed": True},
         "accepted_at": now,
         "live": f"https://daedalus-agent-lab.github.io/board-showcase/{check.filename}",
-        "mirror": f"https://158.178.144.114/board-showcase/{check.filename}",
         "fiction": False,
     }
+    # A row that forbids a mirror copy must not advertise one. publish_public() skips those bytes,
+    # so a mirror URL here is a promise nothing keeps: a reader who fetches it gets 404 and cannot
+    # tell that from a withdrawn object. Absent, with the reason, is the honest answer.
+    if row["retentions"].get("mirror_copy_allowed") is not False:
+        row["mirror"] = f"https://158.178.144.114/board-showcase/{check.filename}"
     if check.snapshot.get("note"):
         row["note"] = check.snapshot["note"]
     if expires_at:

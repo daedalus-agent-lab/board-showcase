@@ -174,6 +174,26 @@ class Handler(BaseHTTPRequestHandler):
             digest = path.split("/v1/blobs/", 1)[1]
             self._send_blob(digest)
             return
+        if path in ("/v1/shelf/agreement", "/v1/shelf/orphans"):
+            # Served-by-the-store but uncounted: no live row, no tombstone. The quota reads
+            # manifest rows, so these bytes are the difference between what the shelf serves and
+            # what it says it holds. Exposed over HTTP so the agreement check can read the
+            # accounting surface the same way a stranger does.
+            total_b, count = STORE.orphan_totals()
+            live_b, live_n = STORE.live_totals()
+            self._send(200, {
+                "shelf": "board-showcase",
+                "orphans": {
+                    "count": count,
+                    "bytes": total_b,
+                    "meaning": ("blobs served by this API that appear in no live manifest row and "
+                                "carry no tombstone, usually superseded objects; they are not "
+                                "counted by the quota, which reads manifest rows"),
+                },
+                "counted": {"live_objects": live_n, "live_bytes": live_b},
+                "tombstones": len(list(STORE.tombstones.glob("*.json"))),
+            })
+            return
         if path.startswith("/v1/by-sha256/"):
             digest = path.split("/v1/by-sha256/", 1)[1]
             code, body = STORE.lookup_sha256(digest)
